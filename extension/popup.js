@@ -104,7 +104,7 @@ async function checkServer() {
   }
 }
 
-// ---- Solve button → background does everything ----
+// ---- Solve button → try grid first, then drag ----
 solveBtn.addEventListener("click", async () => {
   solveBtn.disabled = true;
   solveBtn.textContent = "Solving...";
@@ -114,40 +114,37 @@ solveBtn.addEventListener("click", async () => {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    // Detect challenge type: drag vs grid
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id, allFrames: true },
-      func: () => {
-        const body = document.body ? document.body.innerHTML : "";
-        const isDrag = body.includes("Move") || body.includes("Drag") || body.includes("drag");
-        const isGrid = body.includes("Select all") || body.includes("rc-imageselect");
-        return { isDrag, isGrid, hasChallenge: isDrag || isGrid };
-      },
-    });
-
-    const challengeType = (results && results[0] && results[0].result) || {};
-    log(`Challenge type: ${challengeType.isDrag ? "DRAG" : challengeType.isGrid ? "GRID" : "unknown"}`);
-
-    const msgType = challengeType.isDrag ? "SOLVE_DRAG_CHALLENGE" : "SOLVE_RECAPTCHA";
-
+    // Try grid solve first
+    log("Trying grid solve...");
     chrome.runtime.sendMessage(
-      { type: msgType, tabId: tab.id, keys: keys },
+      { type: "SOLVE_RECAPTCHA", tabId: tab.id, keys: keys },
       (response) => {
         void chrome.runtime.lastError;
         if (response && response.success) {
-          if (response.tiles) {
-            log(`Solved! Clicked tiles: [${response.tiles.join(", ")}]`, "ok");
-          } else if (response.solution) {
-            log(`Solved! Dragged: source ${response.solution.source} → (${response.solution.target_x}, ${response.solution.target_y})`, "ok");
-          }
-          log(`AI: ${response.aiAnswer || JSON.stringify(response.solution)}`, "ok");
-        } else if (response && response.error) {
-          log(`Error: ${response.error}`, "err");
-        } else {
-          log("No response from background", "err");
+          log(`Solved! Tiles: [${response.tiles.join(", ")}]`, "ok");
+          log(`AI: ${response.aiAnswer}`, "ok");
+          solveBtn.disabled = false;
+          solveBtn.textContent = "Solve CAPTCHA on This Page";
+          return;
         }
-        solveBtn.disabled = false;
-        solveBtn.textContent = "Solve CAPTCHA on This Page";
+
+        // Grid failed, try drag
+        log("Grid didn't work, trying drag solve...");
+        chrome.runtime.sendMessage(
+          { type: "SOLVE_DRAG_CHALLENGE", tabId: tab.id, keys: keys },
+          (dragResponse) => {
+            void chrome.runtime.lastError;
+            if (dragResponse && dragResponse.success) {
+              log(`Drag solved! Source: ${dragResponse.solution.source} → (${dragResponse.solution.target_x}, ${dragResponse.solution.target_y})`, "ok");
+            } else if (dragResponse && dragResponse.error) {
+              log(`Drag error: ${dragResponse.error}`, "err");
+            } else {
+              log("No response for drag", "err");
+            }
+            solveBtn.disabled = false;
+            solveBtn.textContent = "Solve CAPTCHA on This Page";
+          }
+        );
       }
     );
   } catch (e) {

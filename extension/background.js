@@ -155,57 +155,52 @@ Return ONLY the JSON.`,
           return;
         }
 
-        // Inject drag into the challenge frame
+        // Inject drag into ALL frames (including hCaptcha iframe)
         const tabId = sender.tab ? sender.tab.id : msg.tabId;
         await chrome.scripting.executeScript({
           target: { tabId, allFrames: true },
           func: (sol) => {
-            // Find the challenge container
-            const challenge = document.querySelector('.rc-imageselect-challenge, .challenge-container, [class*="challenge"]');
-            if (!challenge) return false;
+            // Only run inside the hCaptcha challenge frame
+            if (!document.querySelector('.challenge-container, [class*="challenge"], .task-image')) return false;
 
-            // Find Move buttons on the left
-            const moveButtons = document.querySelectorAll('.move-button, [class*="move"], button');
-            let sourceEl = null;
-            let sourceIndex = 0;
+            // Find Move buttons (these are the drag sources)
+            const moveBtns = document.querySelectorAll('.move-button, [class*="move"], [aria-label*="Move"]');
+            if (moveBtns.length === 0) return false;
 
-            // Try to find the draggable source by index
-            const draggables = document.querySelectorAll('[draggable], .draggable, [class*="drag"]');
-            if (draggables.length > sol.source) {
-              sourceEl = draggables[sol.source];
-            }
+            // Pick the source by index (0=top, 1=middle, 2=bottom)
+            const sourceBtn = moveBtns[Math.min(sol.source, moveBtns.length - 1)];
+            if (!sourceBtn) return false;
 
-            // If no draggable found, try clicking the Move button
-            if (!sourceEl && moveButtons.length > sol.source) {
-              sourceEl = moveButtons[sol.source];
-              sourceEl.click();
-            }
-
-            if (!sourceEl) return false;
-
-            // Get source position
-            const srcRect = sourceEl.getBoundingClientRect();
+            // Find the parent draggable element
+            const sourceCard = sourceBtn.closest('[class*="card"], [class*="item"], [class*="source"]') || sourceBtn.parentElement;
+            const srcRect = sourceCard.getBoundingClientRect();
             const startX = srcRect.left + srcRect.width / 2;
             const startY = srcRect.top + srcRect.height / 2;
 
-            // Calculate target position (relative to viewport)
+            // Target position
             const tgtX = sol.target_x;
             const tgtY = sol.target_y;
 
-            // Perform drag with human-like movement
-            const mouseDown = new MouseEvent('mousedown', { clientX: startX, clientY: startY, bubbles: true });
-            sourceEl.dispatchEvent(mouseDown);
+            // Perform drag with realistic movement
+            sourceCard.dispatchEvent(new MouseEvent('mousedown', {
+              clientX: startX, clientY: startY, bubbles: true, cancelable: true
+            }));
 
-            // Move in steps
-            const steps = 15;
+            // Move in human-like steps with slight randomness
+            const steps = 20;
             for (let i = 1; i <= steps; i++) {
-              const x = startX + (tgtX - startX) * (i / steps);
-              const y = startY + (tgtY - startY) * (i / steps);
-              document.dispatchEvent(new MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true }));
+              const progress = i / steps;
+              const x = startX + (tgtX - startX) * progress;
+              const y = startY + (tgtY - startY) * progress + (Math.random() - 0.5) * 2;
+              document.dispatchEvent(new MouseEvent('mousemove', {
+                clientX: x, clientY: y, bubbles: true, cancelable: true
+              }));
             }
 
-            // Release
-            document.dispatchEvent(new MouseEvent('mouseup', { clientX: tgtX, clientY: tgtY, bubbles: true }));
+            // Release at target
+            document.dispatchEvent(new MouseEvent('mouseup', {
+              clientX: tgtX, clientY: tgtY, bubbles: true, cancelable: true
+            }));
 
             return true;
           },
