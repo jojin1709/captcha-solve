@@ -104,43 +104,142 @@ async function checkServer() {
   }
 }
 
-// ---- Solve button → auto-detect challenge type ----
+// ---- API call ----
+async function apiCall(path, body) {
+  const keys = getKeys();
+  body.api_keys = keys;
+  const resp = await fetch(`${getServerUrl()}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await resp.json();
+  if (json.error) throw new Error(json.error);
+  return json;
+}
+
+// ---- Capture screenshot ----
+function captureTab() {
+  return new Promise((resolve) => {
+    chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+      if (chrome.runtime.lastError || !dataUrl) resolve(null);
+      else resolve(dataUrl.split(",")[1]);
+    });
+  });
+}
+
+// ---- Solve button → popup does EVERYTHING ----
 solveBtn.addEventListener("click", async () => {
   solveBtn.disabled = true;
   solveBtn.textContent = "Solving...";
-  const keys = getKeys();
-  log(`Sending to background (${Object.keys(keys).length} keys)...`);
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const isHcaptcha = tab.url && tab.url.includes("hcaptcha");
 
-    // hCaptcha always uses drag challenges → try drag first
-    const msgType = isHcaptcha ? "SOLVE_DRAG_CHALLENGE" : "SOLVE_RECAPTCHA";
-    log(`Detected: ${isHcaptcha ? "hCaptcha (drag)" : "reCAPTCHA (grid)"}`);
+    // 1. Capture screenshot
+    log("Capturing screenshot...");
+    const screenshot = await captureTab();
+    if (!screenshot) { log("Screenshot failed", "err"); return; }
 
-    chrome.runtime.sendMessage(
-      { type: msgType, tabId: tab.id, keys: keys },
-      (response) => {
-        void chrome.runtime.lastError;
-        if (response && response.success) {
-          if (response.tiles) {
-            log(`Solved! Tiles: [${response.tiles.join(", ")}]`, "ok");
-          } else if (response.solution) {
-            log(`Dragged! Source ${response.solution.source} → (${response.solution.target_x}, ${response.solution.target_y})`, "ok");
-          }
-          log(`AI: ${response.aiAnswer || JSON.stringify(response.solution)}`, "ok");
-        } else if (response && response.error) {
-          log(`Error: ${response.error}`, "err");
-        } else {
-          log("No response from background", "err");
-        }
-        solveBtn.disabled = false;
-        solveBtn.textContent = "Solve CAPTCHA on This Page";
+    // 2. Send to AI
+    const prompt = isHcaptcha
+      ? `This is a drag-and-drop hCaptcha challenge. "Drag ONE character to the matching character behind the lines."
+RIGHT side: animals with "Move" buttons (sources, 1-indexed top to bottom).
+LEFT side: animals behind fence (targets).
+Return ONLY JSON: {"source": 0, "target_x": 150, "target_y": 200}
+source: 0-based index of Move button (0=top). target_x/y: pixel position of matching animal on LEFT.
+If cannot determine: {"skip": true}`
+      : `This is a reCAPTCHA image challenge. "Select all squares with [object]".
+Grid 3x3 or 4x4. Numbered 1-9 or 1-16, left-to-right, top-to-bottom.
+Return ONLY numbers of matching squares, comma-separated. Example: 1,3,7. If none: 0`;
+
+    log("Sending to AI...");
+    const result = await apiCall("/solve/image", { image_base64: screenshot, prompt });
+    if (!result.answer) { log("AI returned nothing", "err"); return; }
+    log(`AI: ${result.answer}`, "ok");
+
+    // 3. Parse and execute
+    if (isHcaptcha) {
+      // Parse JSON drag solution
+      let solution;
+      try {
+        const j = result.answer.match(/\{[\s\S]*?\}/);
+        if (j) solution = JSON.parse(j[0]);
+      } catch (_) {}
+
+      if (!solution || solution.skip) {
+        log("AI couldn't solve drag challenge", "err");
+        return;
       }
-    );
+
+      log(`Drag: source ${solution.source} → (${solution.target_x}, ${solution.target_y})`);
+
+      // Inject drag into ALL frames
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        func: (sol) => {
+          // Find Move buttons
+          const allEls = document.querySelectorAll('*');
+          const moveBtns = [];
+          allEls.forEach(el => {
+            if (el.textContent && el.textContent.trim() === 'Move' && el.offsetParent !== null) {
+              moveBtns.push(el);
+            }
+          });
+          if (moveBtns.length === 0) return false;
+
+          const src = moveBtns[Math.min(sol.source, moveBtns.length - 1)];
+          if (!src) return false;
+          const r = src.getBoundingClientRect();
+          const sx = r.left + r.width / 2, sy = r.top + r.height / 2;
+          const tx = sol.target_x, ty = sol.target_y;
+
+          src.dispatchEvent(new MouseEvent('mousedown', { clientX: sx, clientY: sy, bubbles: true }));
+          for (let i = 1; i <= 25; i++) {
+            const t = i / 25;
+            const e = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2;
+            document.dispatchEvent(new MouseEvent('mousemove', {
+              clientX: sx+(tx-sx)*e, clientY: sy+(ty-sy)*e+(Math.random()-0.5)*1.5, bubbles: true
+            }));
+          }
+          document.dispatchEvent(new MouseEvent('mouseup', { clientX: tx, clientY: ty, bubbles: true }));
+          return true;
+        },
+        args: [solution],
+      });
+      log("Drag injected!", "ok");
+
+    } else {
+      // Parse grid tile numbers
+      const nums = result.answer.match(/\d+/g);
+      if (!nums || nums.length === 0 || (nums.length === 1 && nums[0] === "0")) {
+        log("No matching tiles found", "err");
+        return;
+      }
+      const indices = nums.map(n => parseInt(n) - 1);
+      log(`Clicking tiles: [${indices.join(", ")}]`);
+
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        func: (tileIndices) => {
+          const tiles = document.querySelectorAll('td[role="button"], .rc-imageselect-tile, table td');
+          if (tiles.length === 0) return false;
+          tileIndices.forEach(i => { if (tiles[i]) tiles[i].click(); });
+          setTimeout(() => {
+            const btn = document.querySelector('#recaptcha-verify-button, .rc-button-default');
+            if (btn) btn.click();
+          }, 1500);
+          return true;
+        },
+        args: [indices],
+      });
+      log("Grid tiles clicked!", "ok");
+    }
+
   } catch (e) {
     log(`Error: ${e.message}`, "err");
+  } finally {
     solveBtn.disabled = false;
     solveBtn.textContent = "Solve CAPTCHA on This Page";
   }
