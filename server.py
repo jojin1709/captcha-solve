@@ -93,9 +93,10 @@ def status():
 def solve_image():
     data = request.json or {}
     k = data.get("api_keys", {})
-    print(f"[Server v1.2] /solve/image keys: {list(k.keys()) if k else 'EMPTY'}", flush=True)
+    print(f"[v1.4] solve_image keys={list(k.keys()) if k else 'EMPTY'}", flush=True)
+    print(f"[v1.4] any(values)={any(k.values()) if k else False}", flush=True)
     ai = _ai(k)
-    print(f"[Server v1.2] ai result: {ai}", flush=True)
+    print(f"[v1.4] ai={ai}, available={ai.available() if ai else 'N/A'}", flush=True)
 
     if ai and ai.available():
         try:
@@ -104,19 +105,19 @@ def solve_image():
                 image_url=data.get("image_url"),
                 prompt=data.get("prompt", "Read the text in this captcha image. Return only the text."),
             )
-            return jsonify({"answer": answer.strip(), "engine": "ai"})
+            return jsonify({"answer": answer.strip(), "engine": "ai", "version": "1.4"})
         except Exception as e:
-            print(f"[AI] image failed: {e}")
+            print(f"[AI] image failed: {e}", flush=True)
 
     tc = _tc(k)
     if tc:
         try:
             uri = f"data:image/png;base64,{data['image_base64']}" if data.get("image_base64") else data.get("image_url")
-            return jsonify({"answer": tc.normal(uri), "engine": "twocaptcha"})
+            return jsonify({"answer": tc.normal(uri), "engine": "twocaptcha", "version": "1.4"})
         except Exception as e:
-            print(f"[2Captcha] image failed: {e}")
+            print(f"[2Captcha] image failed: {e}", flush=True)
 
-    return jsonify({"error": "Add Grok/Gemini/OpenRouter key in extension Settings", "version": "1.3"}), 503
+    return jsonify({"error": "Add Grok/Gemini/OpenRouter key in extension Settings", "version": "1.4"}), 503
 
 
 @app.route("/solve/recaptcha", methods=["POST"])
