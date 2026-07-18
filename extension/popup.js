@@ -97,7 +97,10 @@ engineSelect.addEventListener("change", () => {
 function sendToContent(msg) {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (tabs[0]) {
-      try { chrome.tabs.sendMessage(tabs[0].id, msg); } catch (_) {}
+      chrome.tabs.sendMessage(tabs[0].id, msg, () => {
+        // Ignore errors - content script may not be loaded
+        void chrome.runtime.lastError;
+      });
     }
   });
 }
@@ -144,15 +147,20 @@ solveBtn.addEventListener("click", async () => {
   log("Solving...");
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const response = await chrome.tabs.sendMessage(tab.id, { type: "SOLVE_NOW" });
-    if (response && response.answer) {
-      log(`Solved!`, "ok");
-    } else if (response && response.error) {
-      log(`Error: ${response.error}`, "err");
-    }
+    chrome.tabs.sendMessage(tab.id, { type: "SOLVE_NOW" }, (response) => {
+      void chrome.runtime.lastError;
+      if (response && response.answer) {
+        log(`Solved!`, "ok");
+      } else if (response && response.error) {
+        log(`Error: ${response.error}`, "err");
+      } else {
+        log("No response from content script", "err");
+      }
+      solveBtn.disabled = false;
+      solveBtn.textContent = "Solve CAPTCHA on This Page";
+    });
   } catch (e) {
     log(`Error: ${e.message}`, "err");
-  } finally {
     solveBtn.disabled = false;
     solveBtn.textContent = "Solve CAPTCHA on This Page";
   }
