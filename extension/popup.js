@@ -237,21 +237,40 @@ Return ONLY numbers of matching squares, comma-separated. Example: 1,3,7. If non
       const indices = nums.map(n => parseInt(n) - 1);
       log(`Clicking tiles: [${indices.join(", ")}]`);
 
-      await chrome.scripting.executeScript({
+      // Inject clicks into reCAPTCHA challenge frame
+      const injectResult = await chrome.scripting.executeScript({
         target: { tabId: tab.id, allFrames: true },
+        world: "MAIN",
         func: (tileIndices) => {
-          const tiles = document.querySelectorAll('td[role="button"], .rc-imageselect-tile, table td');
-          if (tiles.length === 0) return false;
-          tileIndices.forEach(i => { if (tiles[i]) tiles[i].click(); });
+          // Try multiple selectors for reCAPTCHA tiles
+          let tiles = document.querySelectorAll('td.rc-imageselect-tile');
+          if (tiles.length === 0) tiles = document.querySelectorAll('td[role="button"]');
+          if (tiles.length === 0) tiles = document.querySelectorAll('.rc-imageselect-checkbox');
+          if (tiles.length === 0) tiles = document.querySelectorAll('table.rc-imageselect-table-33 td, table.rc-imageselect-table-44 td');
+          if (tiles.length === 0) tiles = document.querySelectorAll('table td');
+
+          if (tiles.length === 0) return { clicked: 0, total: 0 };
+
+          let clicked = 0;
+          tileIndices.forEach(i => {
+            if (tiles[i]) {
+              tiles[i].click();
+              clicked++;
+            }
+          });
+
+          // Click verify button
           setTimeout(() => {
-            const btn = document.querySelector('#recaptcha-verify-button, .rc-button-default');
+            const btn = document.querySelector('#recaptcha-verify-button');
             if (btn) btn.click();
           }, 1500);
-          return true;
+
+          return { clicked, total: tiles.length };
         },
         args: [indices],
       });
-      log("Grid tiles clicked!", "ok");
+      const injectData = (injectResult && injectResult[0] && injectResult[0].result) || {};
+      log(`Clicked ${injectData.clicked || 0}/${injectData.total || 0} tiles`, injectData.clicked > 0 ? "ok" : "err");
     }
 
   } catch (e) {
