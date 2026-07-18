@@ -175,40 +175,96 @@ Return ONLY numbers of matching squares, comma-separated. Example: 1,3,7. If non
 
       log(`Drag: source ${solution.source} → (${solution.target_x}, ${solution.target_y})`);
 
-      // Inject drag into ALL frames
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        func: (sol) => {
-          // Find Move buttons
-          const allEls = document.querySelectorAll('*');
-          const moveBtns = [];
-          allEls.forEach(el => {
-            if (el.textContent && el.textContent.trim() === 'Move' && el.offsetParent !== null) {
-              moveBtns.push(el);
-            }
-          });
-          if (moveBtns.length === 0) return false;
+      // Use chrome.debugger for REAL browser-level mouse events
+      const debuggerTarget = { tabId: tab.id };
 
-          const src = moveBtns[Math.min(sol.source, moveBtns.length - 1)];
-          if (!src) return false;
-          const r = src.getBoundingClientRect();
-          const sx = r.left + r.width / 2, sy = r.top + r.height / 2;
-          const tx = sol.target_x, ty = sol.target_y;
-
-          src.dispatchEvent(new MouseEvent('mousedown', { clientX: sx, clientY: sy, bubbles: true }));
-          for (let i = 1; i <= 25; i++) {
-            const t = i / 25;
-            const e = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2;
-            document.dispatchEvent(new MouseEvent('mousemove', {
-              clientX: sx+(tx-sx)*e, clientY: sy+(ty-sy)*e+(Math.random()-0.5)*1.5, bubbles: true
-            }));
-          }
-          document.dispatchEvent(new MouseEvent('mouseup', { clientX: tx, clientY: ty, bubbles: true }));
-          return true;
-        },
-        args: [solution],
+      // Attach debugger
+      await new Promise((resolve, reject) => {
+        chrome.debugger.attach(debuggerTarget, "1.3", () => {
+          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+          else resolve();
+        });
       });
-      log("Drag injected!", "ok");
+
+      // First find the Move button position using CDP
+      const evalResult = await new Promise((resolve) => {
+        chrome.debugger.sendCommand(debuggerTarget, "Runtime.evaluate", {
+          expression: `
+            (() => {
+              const allEls = document.querySelectorAll('*');
+              const moveBtns = [];
+              allEls.forEach(el => {
+                if (el.textContent && el.textContent.trim() === 'Move' && el.offsetParent !== null) {
+                  moveBtns.push(el);
+                }
+              });
+              if (moveBtns.length === 0) return JSON.stringify({found: false});
+              const src = moveBtns[Math.min(${solution.source}, moveBtns.length - 1)];
+              const r = src.getBoundingClientRect();
+              return JSON.stringify({found: true, x: r.left + r.width/2, y: r.top + r.height/2});
+            })()
+          `,
+          returnByValue: true,
+        }, (result) => {
+          resolve(result && result.result ? result.result.value : null);
+        });
+      });
+
+      let startX, startY;
+      if (evalResult) {
+        try {
+          const parsed = JSON.parse(evalResult);
+          if (parsed.found) {
+            startX = parsed.x;
+            startY = parsed.y;
+          }
+        } catch (_) {}
+      }
+
+      // Fallback coordinates if eval failed
+      if (!startX) startX = 430;
+      if (!startY) startY = 150 + solution.source * 100;
+
+      const tgtX = solution.target_x;
+      const tgtY = solution.target_y;
+
+      // Perform real drag via CDP Input events
+      await new Promise(r => setTimeout(r, 200));
+
+      // Mouse down
+      await new Promise((resolve) => {
+        chrome.debugger.sendCommand(debuggerTarget, "Input.dispatchMouseEvent", {
+          type: "mousePressed", x: startX, y: startY, button: "left", clickCount: 1,
+        }, () => resolve());
+      });
+
+      // Move in human-like steps
+      const steps = 20;
+      for (let i = 1; i <= steps; i++) {
+        await new Promise(r => setTimeout(r, 30 + Math.random() * 20));
+        const t = i / steps;
+        const eased = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2,2)/2;
+        const x = startX + (tgtX - startX) * eased;
+        const y = startY + (tgtY - startY) * eased + (Math.random() - 0.5) * 2;
+        await new Promise((resolve) => {
+          chrome.debugger.sendCommand(debuggerTarget, "Input.dispatchMouseEvent", {
+            type: "mouseMoved", x: x, y: y, button: "left",
+          }, () => resolve());
+        });
+      }
+
+      await new Promise(r => setTimeout(r, 100));
+
+      // Mouse up
+      await new Promise((resolve) => {
+        chrome.debugger.sendCommand(debuggerTarget, "Input.dispatchMouseEvent", {
+          type: "mouseReleased", x: tgtX, y: tgtY, button: "left", clickCount: 1,
+        }, () => resolve());
+      });
+
+      // Detach debugger
+      chrome.debugger.detach(debuggerTarget, () => {});
+      log("Real drag performed via browser API!", "ok");
 
     } else {
       // Parse grid tile numbers
