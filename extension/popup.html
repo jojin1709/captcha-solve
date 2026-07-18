@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 380px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f0f1a;
+      color: #eee;
+      padding: 0;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      background: #161625;
+      border-bottom: 1px solid #2a2a3a;
+    }
+    .tab {
+      flex: 1;
+      padding: 12px 0;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 600;
+      color: #666;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.2s;
+    }
+    .tab.active {
+      color: #00d4ff;
+      border-bottom-color: #00d4ff;
+    }
+    .tab:hover { color: #aaa; }
+
+    .panel { display: none; padding: 16px; }
+    .panel.active { display: block; }
+
+    h2 {
+      font-size: 16px;
+      text-align: center;
+      margin-bottom: 14px;
+      color: #00d4ff;
+    }
+
+    /* Status */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      background: #161625;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      font-size: 12px;
+    }
+    .status-dot {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #ff4444;
+      flex-shrink: 0;
+    }
+    .status-dot.ok { background: #44ff44; }
+
+    /* Toggle */
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      background: #161625;
+      border-radius: 8px;
+      margin-bottom: 8px;
+    }
+    .toggle-row span { font-size: 13px; }
+    .switch {
+      position: relative;
+      width: 40px; height: 22px;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #444;
+      border-radius: 22px;
+      transition: 0.3s;
+    }
+    .slider::before {
+      content: "";
+      position: absolute;
+      height: 16px; width: 16px;
+      left: 3px; bottom: 3px;
+      background: #fff;
+      border-radius: 50%;
+      transition: 0.3s;
+    }
+    input:checked + .slider { background: #00d4ff; }
+    input:checked + .slider::before { transform: translateX(18px); }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    label { font-size: 13px; color: #aaa; }
+    select {
+      background: #161625;
+      border: 1px solid #333;
+      color: #eee;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      width: 170px;
+    }
+
+    /* Settings inputs */
+    .field {
+      margin-bottom: 12px;
+    }
+    .field label {
+      display: block;
+      font-size: 12px;
+      color: #888;
+      margin-bottom: 4px;
+    }
+    .field .input-row {
+      display: flex;
+      gap: 6px;
+    }
+    .field input {
+      flex: 1;
+      background: #161625;
+      border: 1px solid #2a2a3a;
+      color: #eee;
+      padding: 8px 10px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: monospace;
+    }
+    .field input:focus {
+      outline: none;
+      border-color: #00d4ff;
+    }
+    .field input::placeholder { color: #444; }
+    .field .hint {
+      font-size: 10px;
+      color: #555;
+      margin-top: 3px;
+    }
+    .field .hint a {
+      color: #00d4ff;
+      text-decoration: none;
+    }
+
+    .btn {
+      width: 100%;
+      padding: 10px;
+      background: #00d4ff;
+      color: #0f0f1a;
+      border: none;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 6px;
+    }
+    .btn:hover { background: #00b8d9; }
+    .btn:disabled { background: #333; color: #666; cursor: default; }
+    .btn.secondary {
+      background: #2a2a3a;
+      color: #aaa;
+    }
+    .btn.secondary:hover { background: #333; color: #eee; }
+
+    .save-row {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .save-row .btn { flex: 1; }
+
+    .saved-msg {
+      text-align: center;
+      font-size: 12px;
+      color: #44ff44;
+      margin-top: 8px;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .saved-msg.show { opacity: 1; }
+
+    /* Log */
+    .log {
+      margin-top: 12px;
+      padding: 8px;
+      background: #0a0a12;
+      border-radius: 6px;
+      font-size: 10px;
+      max-height: 100px;
+      overflow-y: auto;
+      color: #666;
+      font-family: monospace;
+    }
+    .log .ok { color: #44ff44; }
+    .log .err { color: #ff6666; }
+
+    .section-title {
+      font-size: 11px;
+      color: #555;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin: 14px 0 8px;
+      padding-bottom: 4px;
+      border-bottom: 1px solid #1a1a2a;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="main">Solve</div>
+    <div class="tab" data-tab="settings">Settings</div>
+  </div>
+
+  <!-- Main Panel -->
+  <div class="panel active" id="panel-main">
+    <div class="status-bar">
+      <div class="status-dot" id="statusDot"></div>
+      <span id="statusText">Checking server...</span>
+    </div>
+
+    <div class="toggle-row">
+      <span>Auto-solve enabled</span>
+      <label class="switch">
+        <input type="checkbox" id="autoSolve" checked>
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="row">
+      <label>Engine</label>
+      <select id="engine">
+        <option value="auto">Auto (best available)</option>
+        <option value="ai">AI only</option>
+        <option value="twocaptcha">2Captcha only</option>
+      </select>
+    </div>
+
+    <button class="btn" id="solveBtn">Solve CAPTCHA on This Page</button>
+
+    <div class="log" id="log"></div>
+  </div>
+
+  <!-- Settings Panel -->
+  <div class="panel" id="panel-settings">
+
+    <div class="section-title">AI Providers (for image / text / puzzle / audio)</div>
+
+    <div class="field">
+      <label>OpenAI API Key</label>
+      <input type="password" id="keyOpenai" placeholder="sk-...">
+      <div class="hint">GPT-4o vision. <a href="https://platform.openai.com/api-keys" target="_blank">Get key</a></div>
+    </div>
+
+    <div class="field">
+      <label>Grok / xAI API Key</label>
+      <input type="password" id="keyXai" placeholder="xai-...">
+      <div class="hint">Grok-2 vision. <a href="https://console.x.ai/" target="_blank">Get key</a> (has free credits)</div>
+    </div>
+
+    <div class="field">
+      <label>Groq API Key (Free & Fast)</label>
+      <input type="password" id="keyGroq" placeholder="gsk_...">
+      <div class="hint">Fastest inference, free tier. <a href="https://console.groq.com/keys" target="_blank">Get key</a></div>
+    </div>
+
+    <div class="field">
+      <label>OpenRouter API Key (Recommended Free)</label>
+      <input type="password" id="keyOpenrouter" placeholder="sk-or-...">
+      <div class="hint">100+ models incl. free ones. <a href="https://openrouter.ai/keys" target="_blank">Get key</a></div>
+    </div>
+
+    <div class="field">
+      <label>Google Gemini API Key</label>
+      <input type="password" id="keyGemini" placeholder="AIza...">
+      <div class="hint">Free tier available. <a href="https://aistudio.google.com/apikey" target="_blank">Get key</a></div>
+    </div>
+
+    <div class="section-title">2Captcha API (for reCAPTCHA / hCaptcha / Turnstile)</div>
+
+    <div class="field">
+      <label>2Captcha API Key</label>
+      <input type="password" id="keyTwocaptcha" placeholder="paste your key...">
+      <div class="hint">Paid service, ~$3/1000 captchas. <a href="https://2captcha.com/" target="_blank">Sign up</a></div>
+    </div>
+
+    <div class="section-title">Server</div>
+    <div class="field">
+      <label>Server URL</label>
+      <input type="text" id="serverUrl" placeholder="http://127.0.0.1:5555">
+      <div class="hint">Local: http://127.0.0.1:5555 | Cloud: paste your Render/Railway URL</div>
+    </div>
+
+    <div class="save-row">
+      <button class="btn" id="saveBtn">Save Settings</button>
+    </div>
+    <div class="saved-msg" id="savedMsg">Settings saved!</div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
