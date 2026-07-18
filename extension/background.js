@@ -98,8 +98,7 @@ If none match, return: 0`,
         // 4. Inject clicks into ALL frames
         const tabId = sender.tab ? sender.tab.id : msg.tabId;
         await chrome.scripting.executeScript({
-          target: { tabId },
-          allFrames: true,
+          target: { tabId, allFrames: true },
           func: (tileIndices) => {
             const tiles = document.querySelectorAll(
               'td[role="button"], .rc-imageselect-tile, table.rc-imageselect-table-33 td, table.rc-imageselect-table-44 td'
