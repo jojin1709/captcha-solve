@@ -36,7 +36,36 @@ def _tc(keys):
 
 @app.route("/")
 def home():
-    return jsonify({"ok": True, "name": "Captcha Solver API", "version": "1.0.0"})
+    return jsonify({"ok": True, "name": "Captcha Solver API", "version": "1.1.0"})
+
+
+@app.route("/debug", methods=["POST"])
+def debug():
+    """Debug endpoint to check why AI engine fails."""
+    data = request.json or {}
+    k = data.get("api_keys", {})
+    result = {"received_keys": list(k.keys()), "key_values": {v[:10]+"..." if len(v)>10 else v for v in k.values()} if k else {}}
+
+    if not k:
+        result["error"] = "No keys received"
+        return jsonify(result)
+
+    try:
+        from ai_engine import AIEngine
+        result["import_ok"] = True
+    except Exception as e:
+        result["import_error"] = str(e)
+        return jsonify(result)
+
+    try:
+        ai = AIEngine(keys=k)
+        result["engine_created"] = True
+        result["available"] = ai.available()
+        result["providers"] = ai.providers()
+    except Exception as e:
+        result["engine_error"] = str(e)
+
+    return jsonify(result)
 
 
 @app.route("/status", methods=["GET", "POST"])
