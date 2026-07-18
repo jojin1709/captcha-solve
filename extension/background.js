@@ -1,19 +1,14 @@
-// Background service worker: proxies API calls from content script to local server
-// Passes API keys from extension settings to the server
+// Background service worker - stays alive and proxies API calls
 
 function getServerUrl() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(["serverUrl"], (data) => {
-      resolve(data.serverUrl || "http://127.0.0.1:5555");
-    });
+    chrome.storage.local.get(["serverUrl"], (d) => resolve(d.serverUrl || "https://captcha-solve.vercel.app"));
   });
 }
 
 function getKeys() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(["keys"], (data) => {
-      resolve(data.keys || {});
-    });
+    chrome.storage.local.get(["keys"], (d) => resolve(d.keys || {}));
   });
 }
 
@@ -23,8 +18,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       try {
         const serverUrl = await getServerUrl();
         const keys = await getKeys();
-
-        // Merge API keys into the request body
         const body = { ...msg.body, api_keys: keys };
 
         const resp = await fetch(`${serverUrl}${msg.path}`, {
@@ -38,6 +31,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ error: e.message });
       }
     })();
-    return true; // keep channel open for async response
+    return true;
   }
 });

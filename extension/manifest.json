@@ -10,7 +10,8 @@
     "webNavigation"
   ],
   "host_permissions": [
-    "http://127.0.0.1:5555/*"
+    "http://127.0.0.1:5555/*",
+    "https://captcha-solve.vercel.app/*"
   ],
   "action": {
     "default_popup": "popup.html",
