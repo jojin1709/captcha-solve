@@ -12,13 +12,18 @@ CORS(app)
 
 
 def _ai(keys):
+    print(f"[v1.3] _ai called with keys: {list(keys.keys()) if keys else 'EMPTY'}", flush=True)
     if not keys or not any(keys.values()):
+        print("[v1.3] _ai: keys empty or all falsy", flush=True)
         return None
     try:
         from ai_engine import AIEngine
-        return AIEngine(keys=keys)
+        print(f"[v1.3] _ai: creating AIEngine...", flush=True)
+        engine = AIEngine(keys=keys)
+        print(f"[v1.3] _ai: engine available={engine.available()}, providers={engine.providers()}", flush=True)
+        return engine
     except Exception as e:
-        print(f"[AI] init failed: {e}")
+        print(f"[v1.3] _ai: FAILED: {e}", flush=True)
         return None
 
 
@@ -88,8 +93,9 @@ def status():
 def solve_image():
     data = request.json or {}
     k = data.get("api_keys", {})
-    print(f"[Server] /solve/image keys: {list(k.keys()) if k else 'EMPTY'}", flush=True)
+    print(f"[Server v1.2] /solve/image keys: {list(k.keys()) if k else 'EMPTY'}", flush=True)
     ai = _ai(k)
+    print(f"[Server v1.2] ai result: {ai}", flush=True)
 
     if ai and ai.available():
         try:
