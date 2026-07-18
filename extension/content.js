@@ -30,29 +30,9 @@
     }
   });
 
-  // ---- Server call with fallback ----
+  // ---- Server call (direct fetch, always fresh keys) ----
   async function apiCall(path, body) {
-    // Try background first (more reliable for storage access)
-    try {
-      const bgResult = await new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage(
-          { type: "API_REQUEST", path, body },
-          (resp) => {
-            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-            else if (!resp) reject(new Error("No response"));
-            else resolve(resp);
-          }
-        );
-        setTimeout(() => reject(new Error("timeout")), 15000);
-      });
-      if (bgResult.error) throw new Error(bgResult.error);
-      return bgResult;
-    } catch (bgError) {
-      log(`Background failed (${bgError.message}), trying direct fetch...`);
-    }
-
-    // Fallback: direct fetch
-    const data = await new Promise((resolve) => {
+    const { serverUrl, keys } = await new Promise((resolve) => {
       chrome.storage.local.get(["serverUrl", "keys"], (d) => {
         resolve({
           serverUrl: d.serverUrl || "https://captcha-solve.vercel.app",
@@ -60,8 +40,11 @@
         });
       });
     });
-    body.api_keys = data.keys;
-    const resp = await fetch(`${data.serverUrl}${path}`, {
+
+    body.api_keys = keys;
+    log(`Calling ${path} with ${Object.keys(keys).length} key(s)`);
+
+    const resp = await fetch(`${serverUrl}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

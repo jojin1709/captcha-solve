@@ -59,6 +59,7 @@ def status():
 def solve_image():
     data = request.json or {}
     k = data.get("api_keys", {})
+    print(f"[Server] /solve/image keys: {list(k.keys()) if k else 'EMPTY'}", flush=True)
     ai = _ai(k)
 
     if ai and ai.available():
