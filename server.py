@@ -44,7 +44,7 @@ def debug():
     """Debug endpoint to check why AI engine fails."""
     data = request.json or {}
     k = data.get("api_keys", {})
-    result = {"received_keys": list(k.keys()), "key_values": {v[:10]+"..." if len(v)>10 else v for v in k.values()} if k else {}}
+    result = {"received_keys": list(k.keys())}
 
     if not k:
         result["error"] = "No keys received"
