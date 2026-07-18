@@ -1,4 +1,18 @@
-// Background service worker
+// Background service worker - keep alive and proxy API calls
+
+// Keep service worker alive
+let keepAliveInterval;
+chrome.runtime.onInstalled.addListener(() => {
+  keepAliveInterval = setInterval(() => {
+    chrome.runtime.getPlatformInfo(() => {});
+  }, 25000);
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  keepAliveInterval = setInterval(() => {
+    chrome.runtime.getPlatformInfo(() => {});
+  }, 25000);
+});
 
 function getServerUrl() {
   return new Promise((r) => chrome.storage.local.get(["serverUrl"], (d) => r(d.serverUrl || "https://captcha-solve.vercel.app")));
@@ -34,7 +48,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (chrome.runtime.lastError) {
         sendResponse({ error: chrome.runtime.lastError.message });
       } else {
-        // Convert data URL to base64
         const base64 = dataUrl.split(",")[1];
         sendResponse({ base64 });
       }

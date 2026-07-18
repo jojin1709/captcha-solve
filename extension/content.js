@@ -227,76 +227,87 @@
   // ---- hCaptcha Drag Challenge Solver (AI-powered) ----
   async function solveHCaptchaDragChallenge(checkboxFrame, challengeFrame) {
     try {
-      // Capture screenshot via background
+      // Try to capture screenshot
       log("Capturing screenshot...");
       const screenshot = await captureVisibleTab();
-      if (!screenshot) {
-        log("Could not capture screenshot, trying API solve...");
-        return null;
-      }
 
-      log("Screenshot captured, sending to AI...");
+      if (screenshot) {
+        log("Screenshot captured, sending to AI...");
+        const result = await apiCall("/solve/hcaptcha-drag", {
+          screenshot_base64: screenshot,
+        });
 
-      // Send to AI for analysis
-      const result = await apiCall("/solve/hcaptcha-drag", {
-        screenshot_base64: screenshot,
-      });
+        if (result.answer) {
+          log(`AI response: ${result.answer}`);
+          let solution;
+          try {
+            const jsonMatch = result.answer.match(/\{[\s\S]*?\}/);
+            if (jsonMatch) solution = JSON.parse(jsonMatch[0]);
+          } catch (e) { log(`Parse error: ${e.message}`); }
 
-      if (result.answer) {
-        log(`AI response: ${result.answer}`);
-
-        let solution;
-        try {
-          const jsonMatch = result.answer.match(/\{[\s\S]*?\}/);
-          if (jsonMatch) solution = JSON.parse(jsonMatch[0]);
-        } catch (e) {
-          log(`Parse error: ${e.message}`);
-        }
-
-        if (solution && solution.skip) {
-          log("AI says skip");
-          await clickSkipInFrame(challengeFrame);
-          await sleep(2000);
-          return { answer: "skipped", engine: "ai" };
-        }
-
-        if (solution && solution.source_index !== undefined) {
-          log(`Drag animal ${solution.source_index} to (${solution.target_x}, ${solution.target_y})`);
-          await performDragInHcaptchaFrame(challengeFrame, solution);
-          await sleep(2000);
-
-          // Check result
-          const ta = document.querySelector('textarea[name="h-captcha-response"]');
-          if (ta && ta.value && ta.value.length > 10) {
-            notify("hCaptcha solved!");
-            autoSubmit();
-            return { answer: ta.value, engine: "ai" };
+          if (solution && solution.skip) {
+            log("AI says skip");
+            await clickSkipInFrame(challengeFrame);
+            await sleep(2000);
+            return { answer: "skipped", engine: "ai" };
           }
-          log("Drag completed but not solved yet, may need retry");
+
+          if (solution && solution.source_index !== undefined) {
+            log(`Drag animal ${solution.source_index} to (${solution.target_x}, ${solution.target_y})`);
+            await performDragInHcaptchaFrame(challengeFrame, solution);
+            await sleep(2000);
+
+            const ta = document.querySelector('textarea[name="h-captcha-response"]');
+            if (ta && ta.value && ta.value.length > 10) {
+              notify("hCaptcha solved!");
+              autoSubmit();
+              return { answer: ta.value, engine: "ai" };
+            }
+            log("Drag completed, not solved yet");
+          }
         }
+      } else {
+        log("Screenshot failed, trying skip...");
       }
+
+      // Fallback: click Skip
+      await clickSkipInFrame(challengeFrame);
+      await sleep(2000);
+      return { answer: "skipped", engine: "fallback" };
     } catch (e) {
       log(`hCaptcha drag failed: ${e.message}`);
+      // Try skip as last resort
+      try { await clickSkipInFrame(challengeFrame); } catch (_) {}
+      return null;
     }
-    return null;
   }
 
-  // Capture visible tab via background script
+  // Capture visible tab via background script (with retry)
   function captureVisibleTab() {
     return new Promise((resolve) => {
-      try {
-        chrome.runtime.sendMessage({ type: "CAPTURE_TAB" }, (resp) => {
-          if (chrome.runtime.lastError) {
-            resolve(null);
-          } else if (resp && resp.base64) {
-            resolve(resp.base64);
-          } else {
-            resolve(null);
-          }
-        });
-      } catch (e) {
-        resolve(null);
+      let attempts = 0;
+      function tryCapture() {
+        attempts++;
+        try {
+          chrome.runtime.sendMessage({ type: "CAPTURE_TAB" }, (resp) => {
+            if (chrome.runtime.lastError || !resp) {
+              if (attempts < 3) {
+                setTimeout(tryCapture, 500);
+              } else {
+                resolve(null);
+              }
+            } else if (resp.base64) {
+              resolve(resp.base64);
+            } else {
+              resolve(null);
+            }
+          });
+        } catch (e) {
+          if (attempts < 3) setTimeout(tryCapture, 500);
+          else resolve(null);
+        }
       }
+      tryCapture();
     });
   }
 
