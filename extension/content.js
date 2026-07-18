@@ -1,29 +1,18 @@
 /**
- * Captcha Solver - Content Script (Full AI Mode)
- *
- * Detects captchas on the page and solves them using AI vision.
- * Works with: reCAPTCHA v2, hCaptcha, Turnstile, image captchas, puzzles.
- * No paid API needed — uses AI (Grok/Gemini/OpenAI) via local server.
- *
- * How it works:
- * 1. Detects captcha iframe or element
- * 2. Clicks checkbox to trigger challenge
- * 3. Screenshots the challenge
- * 4. Sends image to AI server for analysis
- * 5. Clicks correct tiles / fills answer
- * 6. Browser handles token generation naturally
+ * Captcha Solver - Content Script
+ * Detects and solves captchas using AI via the local/cloud server.
+ * Uses keyboard events to bypass CSP restrictions on protected sites.
  */
 (() => {
   "use strict";
 
   let settings = { autoSolve: true, engine: "auto" };
-
-  chrome.storage.local.get(["autoSolve", "engine"], (data) => {
-    if (data.autoSolve !== undefined) settings.autoSolve = data.autoSolve;
-    if (data.engine) settings.engine = data.engine;
+  chrome.storage.local.get(["autoSolve", "engine"], (d) => {
+    if (d.autoSolve !== undefined) settings.autoSolve = d.autoSolve;
+    if (d.engine) settings.engine = d.engine;
   });
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((msg, _s, sendResponse) => {
     if (msg.type === "UPDATE_SETTINGS") {
       settings.autoSolve = msg.autoSolve;
       settings.engine = msg.engine;
@@ -37,531 +26,333 @@
 
   // ---- Utilities ----
   function getServerUrl() {
-    return new Promise((resolve) => {
-      chrome.storage.local.get(["serverUrl"], (d) => resolve(d.serverUrl || "http://127.0.0.1:5555"));
-    });
+    return new Promise((r) => chrome.storage.local.get(["serverUrl"], (d) => r(d.serverUrl || "http://127.0.0.1:5555")));
   }
-
   function getKeys() {
-    return new Promise((resolve) => {
-      chrome.storage.local.get(["keys"], (d) => resolve(d.keys || {}));
-    });
+    return new Promise((r) => chrome.storage.local.get(["keys"], (d) => r(d.keys || {})));
   }
-
   async function apiCall(path, body) {
-    const serverUrl = await getServerUrl();
     const keys = await getKeys();
     body.api_keys = keys;
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(
-        { type: "API_REQUEST", path, body },
-        (resp) => {
-          if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
-          else if (resp && resp.error) reject(new Error(resp.error));
-          else resolve(resp);
-        }
-      );
+      chrome.runtime.sendMessage({ type: "API_REQUEST", path, body }, (resp) => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else if (resp && resp.error) reject(new Error(resp.error));
+        else resolve(resp);
+      });
     });
   }
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const log = (msg) => console.log(`[CaptchaSolver] ${msg}`);
 
-  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-  function log(msg) { console.log(`[CaptchaSolver] ${msg}`); }
-
-  function showNotification(text, success = true) {
-    const div = document.createElement("div");
-    div.textContent = `[Captcha Solver] ${text}`;
-    Object.assign(div.style, {
+  function notify(text, ok = true) {
+    const d = document.createElement("div");
+    d.textContent = `[Captcha Solver] ${text}`;
+    Object.assign(d.style, {
       position: "fixed", bottom: "20px", right: "20px", zIndex: "2147483647",
-      background: success ? "#16a34a" : "#dc2626", color: "#fff",
+      background: ok ? "#16a34a" : "#dc2626", color: "#fff",
       padding: "12px 18px", borderRadius: "10px", fontSize: "14px",
       boxShadow: "0 4px 16px rgba(0,0,0,0.4)", fontFamily: "sans-serif",
       transition: "opacity 0.5s",
     });
-    document.body.appendChild(div);
-    setTimeout(() => { div.style.opacity = "0"; setTimeout(() => div.remove(), 600); }, 4000);
+    document.body.appendChild(d);
+    setTimeout(() => { d.style.opacity = "0"; setTimeout(() => d.remove(), 600); }, 4000);
   }
 
-  function screenshotElement(el) {
-    return new Promise((resolve) => {
-      try {
-        const rect = el.getBoundingClientRect();
-        const canvas = document.createElement("canvas");
-        canvas.width = rect.width;
-        canvas.height = rect.height;
-        // Use html2canvas-like approach - for now return null, server will handle
-        resolve(null);
-      } catch (e) { resolve(null); }
-    });
-  }
-
-  // ---- reCAPTCHA v2 Solver ----
-  async function solveReCaptchaV2() {
-    log("Attempting reCAPTCHA v2 solve...");
-
-    // Find reCAPTCHA iframe
-    const recaptchaFrame = document.querySelector('iframe[src*="recaptcha"][src*="anchor"]');
-    if (!recaptchaFrame) {
-      log("No reCAPTCHA anchor frame found");
-      return null;
-    }
-
-    // Extract sitekey
-    const src = recaptchaFrame.src || "";
-    const sitekeyMatch = src.match(/k=([A-Za-z0-9_-]+)/);
-    if (!sitekeyMatch) {
-      log("Could not extract reCAPTCHA sitekey");
-      return null;
-    }
-    const sitekey = sitekeyMatch[1];
-    log(`Found reCAPTCHA sitekey: ${sitekey.substring(0, 20)}...`);
-
-    // Step 1: Click the checkbox
+  // ---- CSP-safe click using keyboard ----
+  async function safeClick(el) {
+    // Focus the element first
+    el.focus();
+    await sleep(100);
+    // Dispatch keyboard Space event (bypasses CSP)
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", keyCode: 32, bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keypress", { key: " ", code: "Space", keyCode: 32, bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent("keyup", { key: " ", code: "Space", keyCode: 32, bubbles: true }));
+    // Also try mousedown/mouseup (some sites need this)
     try {
-      const rect = recaptchaFrame.getBoundingClientRect();
-      // Click center of the reCAPTCHA checkbox iframe
-      const clickX = rect.left + 33;
-      const clickY = rect.top + 33;
+      el.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      el.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    } catch (_) {}
+  }
 
-      const evt = new MouseEvent("click", {
-        bubbles: true, cancelable: true, view: window,
-        clientX: clickX, clientY: clickY
-      });
-      recaptchaFrame.dispatchEvent(evt);
-
-      // Also try clicking via elementFromPoint
-      const target = document.elementFromPoint(clickX, clickY);
-      if (target) {
-        target.click();
-        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+  // ---- Find captcha frames ----
+  function findCaptchas() {
+    const found = [];
+    document.querySelectorAll("iframe").forEach((f) => {
+      const src = (f.src || "").toLowerCase();
+      const title = (f.title || "").toLowerCase();
+      if (src.includes("recaptcha") || title.includes("recaptcha") || title.includes("challenge expires")) {
+        found.push({ type: "recaptcha", el: f });
+      } else if (src.includes("hcaptcha")) {
+        found.push({ type: "hcaptcha", el: f });
+      } else if (src.includes("challenges.cloudflare")) {
+        found.push({ type: "turnstile", el: f });
       }
+    });
+    document.querySelectorAll(".g-recaptcha, [data-sitekey], .h-captcha").forEach((el) => {
+      found.push({ type: "recaptcha", el });
+    });
+    return found;
+  }
 
+  // ---- reCAPTCHA v2 ----
+  async function solveReCaptcha() {
+    log("Solving reCAPTCHA v2...");
+
+    // Find anchor iframe
+    const anchor = document.querySelector('iframe[src*="recaptcha"][src*="anchor"], iframe[title*="reCAPTCHA"]');
+    if (!anchor) {
+      log("No reCAPTCHA anchor frame");
+      return null;
+    }
+
+    // Extract sitekey from src or parent
+    let sitekey = "";
+    const src = anchor.src || "";
+    const m = src.match(/k=([A-Za-z0-9_-]+)/);
+    if (m) sitekey = m[1];
+    if (!sitekey) {
+      const parent = anchor.closest("[data-sitekey]");
+      if (parent) sitekey = parent.getAttribute("data-sitekey") || "";
+    }
+    log(`Sitekey: ${sitekey.substring(0, 15)}...`);
+
+    // Click checkbox via keyboard (CSP-safe)
+    try {
+      await safeClick(anchor);
       log("Clicked reCAPTCHA checkbox");
-      await sleep(2500);
+      await sleep(3000);
     } catch (e) {
       log(`Click failed: ${e.message}`);
     }
 
-    // Step 2: Check if challenge appeared
-    const challengeFrame = document.querySelector(
+    // Check if already solved
+    const textarea = document.querySelector('textarea[name="g-recaptcha-response"]');
+    if (textarea && textarea.value && textarea.value.length > 10) {
+      log("reCAPTCHA already solved");
+      notify("reCAPTCHA solved!");
+      return { answer: textarea.value, engine: "browser" };
+    }
+
+    // Check for challenge frame
+    const challenge = document.querySelector(
       'iframe[src*="recaptcha"][src*="bframe"], iframe[title*="challenge"]'
     );
-
-    if (!challengeFrame) {
-      // Might already be solved (no challenge needed)
-      log("No challenge frame — might be already solved");
-      // Check for success checkmark
-      const textarea = document.querySelector('textarea[name="g-recaptcha-response"]');
-      if (textarea && textarea.value && textarea.value.length > 10) {
-        log("reCAPTCHA already solved (token present)");
-        showNotification("reCAPTCHA solved!");
-        return { answer: "auto-solved", engine: "browser" };
+    if (!challenge) {
+      log("No challenge frame — checking token...");
+      if (textarea && textarea.value) {
+        notify("reCAPTCHA solved!");
+        return { answer: textarea.value, engine: "browser" };
       }
       return null;
     }
 
     log("Challenge appeared, sending to AI...");
 
-    // Step 3: Screenshot the challenge iframe
-    let challengeScreenshot = null;
+    // Send to server for solving
     try {
-      const cRect = challengeFrame.getBoundingClientRect();
-      challengeScreenshot = {
-        x: cRect.x, y: cRect.y,
-        width: cRect.width, height: cRect.height,
-      };
-    } catch (e) {
-      log(`Challenge screenshot failed: ${e.message}`);
-    }
-
-    // Step 4: Ask AI to solve via the challenge URL
-    try {
-      const challengeSrc = challengeFrame.src || "";
       const result = await apiCall("/solve/recaptcha", {
-        sitekey: sitekey,
-        url: location.href,
-        version: "v2",
-        challenge_url: challengeSrc,
-        page_html: document.documentElement.outerHTML.substring(0, 5000),
+        sitekey, url: location.href, version: "v2",
       });
-
       if (result.answer) {
-        log(`AI solved reCAPTCHA: ${result.answer.substring(0, 50)}...`);
-        // Fill token
-        const textarea = document.querySelector('textarea[name="g-recaptcha-response"], #g-recaptcha-response');
         if (textarea) {
           textarea.value = result.answer;
           textarea.dispatchEvent(new Event("input", { bubbles: true }));
-          textarea.dispatchEvent(new Event("change", { bubbles: true }));
         }
-        // Try callback
         tryFireCallback("recaptcha", result.answer);
-        showNotification("reCAPTCHA solved!");
+        notify("reCAPTCHA solved!");
         return result;
       }
     } catch (e) {
-      log(`AI reCAPTCHA solve failed: ${e.message}`);
+      log(`reCAPTCHA solve failed: ${e.message}`);
     }
-
     return null;
   }
 
-  // ---- hCaptcha Solver ----
+  // ---- hCaptcha ----
   async function solveHCaptcha() {
-    log("Attempting hCaptcha solve...");
+    log("Solving hCaptcha...");
+    const frame = document.querySelector('iframe[src*="hcaptcha"][src*="checkbox"], iframe[title*="hCaptcha"]');
+    if (!frame) return null;
 
-    const hcaptchaFrame = document.querySelector('iframe[src*="hcaptcha"][src*="checkbox"]');
-    if (!hcaptchaFrame) {
-      log("No hCaptcha frame found");
-      return null;
-    }
-
-    const src = hcaptchaFrame.src || "";
-    const sitekeyMatch = src.match(/sitekey=([A-Za-z0-9_-]+)/);
-    const div = document.querySelector('.h-captcha, [data-hcaptcha-widget-id]');
-    const sitekey = sitekeyMatch ? sitekeyMatch[1] : (div ? div.getAttribute("data-sitekey") : null);
-
+    let sitekey = "";
+    const m = (frame.src || "").match(/sitekey=([A-Za-z0-9_-]+)/);
+    if (m) sitekey = m[1];
     if (!sitekey) {
-      log("Could not extract hCaptcha sitekey");
-      return null;
+      const div = document.querySelector(".h-captcha, [data-sitekey]");
+      if (div) sitekey = div.getAttribute("data-sitekey") || "";
     }
-
-    // Click checkbox
-    try {
-      const rect = hcaptchaFrame.getBoundingClientRect();
-      const target = document.elementFromPoint(rect.left + 30, rect.top + 30);
-      if (target) {
-        target.click();
-        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-      }
-      log("Clicked hCaptcha checkbox");
-      await sleep(2500);
-    } catch (e) {
-      log(`hCaptcha click failed: ${e.message}`);
-    }
-
-    // Check if challenge appeared
-    const challengeFrame = document.querySelector('iframe[src*="hcaptcha"][src*="challenge"]');
-
-    if (!challengeFrame) {
-      const textarea = document.querySelector('textarea[name="h-captcha-response"]');
-      if (textarea && textarea.value && textarea.value.length > 10) {
-        log("hCaptcha already solved");
-        showNotification("hCaptcha solved!");
-        return { answer: "auto-solved", engine: "browser" };
-      }
-      return null;
-    }
-
-    log("hCaptcha challenge appeared, sending to AI...");
 
     try {
-      const result = await apiCall("/solve/hcaptcha", {
-        sitekey: sitekey,
-        url: location.href,
-        challenge_url: challengeFrame.src || "",
-      });
-
-      if (result.answer) {
-        log(`AI solved hCaptcha`);
-        const textarea = document.querySelector('textarea[name="h-captcha-response"]');
-        if (textarea) {
-          textarea.value = result.answer;
-          textarea.dispatchEvent(new Event("input", { bubbles: true }));
-        }
-        tryFireCallback("hcaptcha", result.answer);
-        showNotification("hCaptcha solved!");
-        return result;
-      }
-    } catch (e) {
-      log(`AI hCaptcha solve failed: ${e.message}`);
-    }
-
-    return null;
-  }
-
-  // ---- Turnstile Solver ----
-  async function solveTurnstile() {
-    log("Attempting Turnstile solve...");
-
-    const turnstileFrame = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
-    if (!turnstileFrame) {
-      log("No Turnstile frame found");
-      return null;
-    }
-
-    const src = turnstileFrame.src || "";
-    const sitekeyMatch = src.match(/sitekey=([A-Za-z0-9_-]+)/);
-    const div = document.querySelector('.cf-turnstile, [data-sitekey]');
-    const sitekey = sitekeyMatch ? sitekeyMatch[1] : (div ? div.getAttribute("data-sitekey") : null);
-
-    // Click the Turnstile checkbox (it's usually just a click-to-verify)
-    try {
-      const rect = turnstileFrame.getBoundingClientRect();
-      const target = document.elementFromPoint(rect.left + 25, rect.top + 25);
-      if (target) {
-        target.click();
-        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
-      }
-      log("Clicked Turnstile checkbox");
+      await safeClick(frame);
       await sleep(3000);
-    } catch (e) {
-      log(`Turnstile click failed: ${e.message}`);
+    } catch (e) { log(`hCaptcha click failed: ${e.message}`); }
+
+    const textarea = document.querySelector('textarea[name="h-captcha-response"]');
+    if (textarea && textarea.value && textarea.value.length > 10) {
+      notify("hCaptcha solved!");
+      return { answer: textarea.value, engine: "browser" };
     }
 
-    // Check if token was generated
-    const input = document.querySelector('input[name="cf-turnstile-response"]');
-    if (input && input.value && input.value.length > 10) {
-      log("Turnstile already solved");
-      showNotification("Turnstile solved!");
-      return { answer: "auto-solved", engine: "browser" };
+    const challenge = document.querySelector('iframe[src*="hcaptcha"][src*="challenge"]');
+    if (!challenge && textarea && textarea.value) {
+      notify("hCaptcha solved!");
+      return { answer: textarea.value, engine: "browser" };
     }
 
-    // If challenge appeared, send to AI
-    if (sitekey) {
+    if (challenge) {
       try {
-        const result = await apiCall("/solve/turnstile", {
-          sitekey: sitekey,
-          url: location.href,
-          challenge_url: turnstileFrame.src || "",
-        });
+        const result = await apiCall("/solve/hcaptcha", { sitekey, url: location.href });
         if (result.answer) {
-          if (input) {
-            input.value = result.answer;
-            input.dispatchEvent(new Event("input", { bubbles: true }));
-          }
-          showNotification("Turnstile solved!");
+          if (textarea) { textarea.value = result.answer; textarea.dispatchEvent(new Event("input", { bubbles: true })); }
+          tryFireCallback("hcaptcha", result.answer);
+          notify("hCaptcha solved!");
           return result;
         }
-      } catch (e) {
-        log(`AI Turnstile solve failed: ${e.message}`);
-      }
+      } catch (e) { log(`hCaptcha failed: ${e.message}`); }
     }
-
     return null;
   }
 
-  // ---- Image Captcha Solver ----
-  async function solveImageCaptcha() {
-    const captchaImgs = document.querySelectorAll(
-      'img[src*="captcha" i], img[alt*="captcha" i], ._captchaImage_rrn3u_9, img[src*="mtcaptcha"]'
-    );
+  // ---- Turnstile ----
+  async function solveTurnstile() {
+    log("Solving Turnstile...");
+    const frame = document.querySelector('iframe[src*="challenges.cloudflare.com"], iframe[title*="Cloudflare"]');
+    if (!frame) return null;
 
-    for (const img of captchaImgs) {
-      log("Found image captcha, sending to AI...");
+    let sitekey = "";
+    const m = (frame.src || "").match(/sitekey=([A-Za-z0-9_-]+)/);
+    if (!sitekey) {
+      const div = document.querySelector(".cf-turnstile, [data-sitekey]");
+      if (div) sitekey = div.getAttribute("data-sitekey") || "";
+    }
+    if (m) sitekey = m[1];
 
+    try {
+      await safeClick(frame);
+      await sleep(4000);
+    } catch (e) { log(`Turnstile click failed: ${e.message}`); }
+
+    const input = document.querySelector('input[name="cf-turnstile-response"]');
+    if (input && input.value && input.value.length > 10) {
+      notify("Turnstile solved!");
+      return { answer: input.value, engine: "browser" };
+    }
+
+    if (sitekey) {
       try {
-        // Convert image to base64
+        const result = await apiCall("/solve/turnstile", { sitekey, url: location.href });
+        if (result.answer) {
+          if (input) { input.value = result.answer; input.dispatchEvent(new Event("input", { bubbles: true })); }
+          notify("Turnstile solved!");
+          return result;
+        }
+      } catch (e) { log(`Turnstile failed: ${e.message}`); }
+    }
+    return null;
+  }
+
+  // ---- Image captcha ----
+  async function solveImageCaptcha() {
+    const imgs = document.querySelectorAll(
+      'img[src*="captcha" i], img[alt*="captcha" i], img[src*="mtcaptcha"]'
+    );
+    for (const img of imgs) {
+      try {
         const canvas = document.createElement("canvas");
         canvas.width = img.naturalWidth || img.width;
         canvas.height = img.naturalHeight || img.height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0);
+        canvas.getContext("2d").drawImage(img, 0, 0);
         const b64 = canvas.toDataURL("image/png").split(",")[1];
 
         const result = await apiCall("/solve/image", {
           image_base64: b64,
-          prompt: "Read the text in this captcha image. Return ONLY the text characters, nothing else.",
+          prompt: "Read the text in this captcha image. Return ONLY the text characters.",
         });
-
         if (result.answer) {
-          log(`AI solved image captcha: ${result.answer}`);
-
-          // Find nearest input and fill
-          const container = img.closest("form") || img.closest("div") || img.parentElement;
-          const inputs = container ? container.querySelectorAll('input[type="text"], input:not([type]), textarea') : [];
-          for (const input of inputs) {
-            if (input.offsetParent !== null) { // visible
-              input.value = result.answer;
-              input.dispatchEvent(new Event("input", { bubbles: true }));
-              input.dispatchEvent(new Event("change", { bubbles: true }));
-              break;
-            }
+          const container = img.closest("form") || img.parentElement;
+          const input = container ? container.querySelector('input[type="text"], input:not([type])') : null;
+          if (input) {
+            input.value = result.answer;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            input.dispatchEvent(new Event("change", { bubbles: true }));
           }
-
-          showNotification(`Captcha solved: ${result.answer}`);
+          notify(`Solved: ${result.answer}`);
           return result;
         }
-      } catch (e) {
-        log(`Image captcha solve failed: ${e.message}`);
-      }
+      } catch (e) { log(`Image captcha failed: ${e.message}`); }
     }
-
     return null;
   }
 
-  // ---- Puzzle/Slider Solver ----
-  async function solvePuzzle() {
-    const puzzleImgs = document.querySelectorAll(
-      'img[src*="puzzle"], img[src*="geetest"], img[src*="slider"]'
-    );
-
-    for (const img of puzzleImgs) {
-      log("Found puzzle captcha, sending to AI...");
-
-      try {
-        const canvas = document.createElement("canvas");
-        canvas.width = img.naturalWidth || img.width;
-        canvas.height = img.naturalHeight || img.height;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0);
-        const b64 = canvas.toDataURL("image/png").split(",")[1];
-
-        const result = await apiCall("/solve/puzzle", {
-          image_base64: b64,
-        });
-
-        if (result.answer) {
-          const pixels = parseInt(result.answer);
-          if (!isNaN(pixels)) {
-            log(`AI says move slider ${pixels}px`);
-
-            // Find slider and drag it
-            const slider = document.querySelector(
-              '.geetest_slider_button, .slider-button, [class*="slider"], [class*="drag"]'
-            );
-            if (slider) {
-              const rect = slider.getBoundingClientRect();
-              const startX = rect.left + rect.width / 2;
-              const startY = rect.top + rect.height / 2;
-
-              // Simulate drag
-              slider.dispatchEvent(new MouseEvent("mousedown", { clientX: startX, clientY: startY, bubbles: true }));
-
-              for (let i = 0; i <= pixels; i += 5) {
-                await sleep(10);
-                document.dispatchEvent(new MouseEvent("mousemove", {
-                  clientX: startX + i, clientY: startY, bubbles: true
-                }));
-              }
-
-              document.dispatchEvent(new MouseEvent("mouseup", {
-                clientX: startX + pixels, clientY: startY, bubbles: true
-              }));
-
-              showNotification(`Slider moved ${pixels}px`);
-              return result;
-            }
-          }
-        }
-      } catch (e) {
-        log(`Puzzle solve failed: ${e.message}`);
-      }
-    }
-
-    return null;
-  }
-
-  // ---- Helper: fire callback ----
+  // ---- Callbacks ----
   function tryFireCallback(type, token) {
     try {
       if (type === "recaptcha" && window.___grecaptcha_cfg) {
         const clients = window.___grecaptcha_cfg.clients;
         if (clients) {
           for (const k of Object.keys(clients)) {
-            const cb = findDeepCallback(clients[k]);
+            const cb = findCb(clients[k]);
             if (cb && typeof cb === "function") { cb(token); return; }
           }
         }
       }
-      if (type === "hcaptcha" && window.hcaptcha) {
-        window.hcaptcha.execute();
-      }
-    } catch (e) {
-      log(`Callback fire failed: ${e.message}`);
-    }
+      if (type === "hcaptcha" && window.hcaptcha) window.hcaptcha.execute();
+    } catch (e) { log(`Callback failed: ${e.message}`); }
   }
 
-  function findDeepCallback(obj, depth = 0) {
-    if (depth > 8 || !obj) return null;
+  function findCb(obj, d = 0) {
+    if (d > 8 || !obj) return null;
     if (typeof obj === "function") return obj;
     if (typeof obj === "object") {
-      for (const key of Object.keys(obj)) {
-        if (key.toLowerCase().includes("callback")) return obj[key];
-        const found = findDeepCallback(obj[key], depth + 1);
-        if (found && typeof found === "function") return found;
+      for (const k of Object.keys(obj)) {
+        if (k.toLowerCase().includes("callback")) return obj[k];
+        const f = findCb(obj[k], d + 1);
+        if (f && typeof f === "function") return f;
       }
     }
     return null;
   }
 
-  // ---- Main: detect and solve ----
-  function findAllCaptchaFrames() {
-    const frames = [];
-    document.querySelectorAll("iframe").forEach(f => {
-      const src = (f.src || "").toLowerCase();
-      const title = (f.title || "").toLowerCase();
-      if (src.includes("recaptcha") || src.includes("google.com/recaptcha") ||
-          title.includes("recaptcha") || title.includes("challenge")) {
-        frames.push({ type: "recaptcha", el: f, src });
-      } else if (src.includes("hcaptcha")) {
-        frames.push({ type: "hcaptcha", el: f, src });
-      } else if (src.includes("challenges.cloudflare")) {
-        frames.push({ type: "turnstile", el: f, src });
-      }
-    });
-    // Also check for g-recaptcha div
-    document.querySelectorAll(".g-recaptcha, [data-sitekey]").forEach(el => {
-      frames.push({ type: "recaptcha", el, src: "" });
-    });
-    return frames;
-  }
-
+  // ---- Main ----
   async function detectAndSolve() {
     if (!settings.autoSolve) return { error: "Auto-solve disabled" };
 
-    const frames = findAllCaptchaFrames();
-    log(`Found ${frames.length} captcha frame(s)`);
+    const captchas = findCaptchas();
+    log(`Found ${captchas.length} captcha(s)`);
 
-    for (const frame of frames) {
-      if (frame.type === "recaptcha") {
-        log("Detected reCAPTCHA");
-        const r = await solveReCaptchaV2();
+    for (const c of captchas) {
+      if (c.type === "recaptcha") {
+        const r = await solveReCaptcha();
         if (r) return r;
       }
-      if (frame.type === "hcaptcha") {
-        log("Detected hCaptcha");
+      if (c.type === "hcaptcha") {
         const r = await solveHCaptcha();
         if (r) return r;
       }
-      if (frame.type === "turnstile") {
-        log("Detected Turnstile");
+      if (c.type === "turnstile") {
         const r = await solveTurnstile();
         if (r) return r;
       }
     }
 
-    // 4. Image captcha
     const r3 = await solveImageCaptcha();
     if (r3) return r3;
-
-    // 5. Puzzle/slider
-    const r4 = await solvePuzzle();
-    if (r4) return r4;
 
     return { error: "No captcha detected" };
   }
 
-  // ---- Auto-detect on load ----
+  // Auto-detect
   function autoDetect() {
     if (!settings.autoSolve) return;
-    const frames = findAllCaptchaFrames();
-    if (frames.length > 0) {
-      log(`Auto-detected ${frames.map(f => f.type).join(", ")}`);
-      detectAndSolve().catch(console.error);
-      return;
-    }
-    // Also check for image captchas
-    if (document.querySelector('img[src*="captcha" i], img[alt*="captcha" i]')) {
-      log("Auto-detected image captcha");
+    if (findCaptchas().length > 0) {
+      log("Auto-detected captcha, solving...");
       detectAndSolve().catch(console.error);
     }
   }
 
-  setTimeout(autoDetect, 1500);
-  new MutationObserver(() => setTimeout(autoDetect, 1000))
+  setTimeout(autoDetect, 2000);
+  new MutationObserver(() => setTimeout(autoDetect, 1500))
     .observe(document.body, { childList: true, subtree: true });
 })();
