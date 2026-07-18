@@ -104,7 +104,7 @@ async function checkServer() {
   }
 }
 
-// ---- Solve button → try grid first, then drag ----
+// ---- Solve button → auto-detect challenge type ----
 solveBtn.addEventListener("click", async () => {
   solveBtn.disabled = true;
   solveBtn.textContent = "Solving...";
@@ -113,38 +113,30 @@ solveBtn.addEventListener("click", async () => {
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const isHcaptcha = tab.url && tab.url.includes("hcaptcha");
 
-    // Try grid solve first
-    log("Trying grid solve...");
+    // hCaptcha always uses drag challenges → try drag first
+    const msgType = isHcaptcha ? "SOLVE_DRAG_CHALLENGE" : "SOLVE_RECAPTCHA";
+    log(`Detected: ${isHcaptcha ? "hCaptcha (drag)" : "reCAPTCHA (grid)"}`);
+
     chrome.runtime.sendMessage(
-      { type: "SOLVE_RECAPTCHA", tabId: tab.id, keys: keys },
+      { type: msgType, tabId: tab.id, keys: keys },
       (response) => {
         void chrome.runtime.lastError;
         if (response && response.success) {
-          log(`Solved! Tiles: [${response.tiles.join(", ")}]`, "ok");
-          log(`AI: ${response.aiAnswer}`, "ok");
-          solveBtn.disabled = false;
-          solveBtn.textContent = "Solve CAPTCHA on This Page";
-          return;
-        }
-
-        // Grid failed, try drag
-        log("Grid didn't work, trying drag solve...");
-        chrome.runtime.sendMessage(
-          { type: "SOLVE_DRAG_CHALLENGE", tabId: tab.id, keys: keys },
-          (dragResponse) => {
-            void chrome.runtime.lastError;
-            if (dragResponse && dragResponse.success) {
-              log(`Drag solved! Source: ${dragResponse.solution.source} → (${dragResponse.solution.target_x}, ${dragResponse.solution.target_y})`, "ok");
-            } else if (dragResponse && dragResponse.error) {
-              log(`Drag error: ${dragResponse.error}`, "err");
-            } else {
-              log("No response for drag", "err");
-            }
-            solveBtn.disabled = false;
-            solveBtn.textContent = "Solve CAPTCHA on This Page";
+          if (response.tiles) {
+            log(`Solved! Tiles: [${response.tiles.join(", ")}]`, "ok");
+          } else if (response.solution) {
+            log(`Dragged! Source ${response.solution.source} → (${response.solution.target_x}, ${response.solution.target_y})`, "ok");
           }
-        );
+          log(`AI: ${response.aiAnswer || JSON.stringify(response.solution)}`, "ok");
+        } else if (response && response.error) {
+          log(`Error: ${response.error}`, "err");
+        } else {
+          log("No response from background", "err");
+        }
+        solveBtn.disabled = false;
+        solveBtn.textContent = "Solve CAPTCHA on This Page";
       }
     );
   } catch (e) {

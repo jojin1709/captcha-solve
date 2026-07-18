@@ -121,23 +121,23 @@ Example: 1,3,7. If none match, return: 0`,
           body: JSON.stringify({
             api_keys: keys,
             image_base64: screenshot,
-            prompt: `This is a drag-and-drop captcha challenge. The instruction says: "Drag ONE character to the matching character behind the lines."
+            prompt: `This is a drag-and-drop hCaptcha challenge. "Drag ONE character to the matching character behind the lines."
 
 Look at the image:
-- LEFT side: animal characters with "Move" buttons (draggable items)
-- RIGHT side: animal characters behind fence/grid lines (targets)
+- RIGHT side: animal characters with "Move" buttons (these are draggable sources, numbered 1-4 from top)
+- LEFT side: animal characters behind fence/grid lines (these are targets)
 
-Which animal on the LEFT matches which animal on the RIGHT?
+The matching pair is where the same animal appears on BOTH sides.
 
-Return ONLY a JSON object:
-{"source": 0, "target_x": 250, "target_y": 150}
+Return ONLY a JSON object like this:
+{"source": 0, "target_x": 150, "target_y": 200}
 
-- source: 0=top animal, 1=middle, 2=bottom
-- target_x: horizontal pixel position of matching animal on the right (estimate 0-400)
-- target_y: vertical pixel position (estimate 0-300)
+- source: 0-based index of the animal to drag (0=top Move button, 1=second, 2=third, 3=fourth)
+- target_x: horizontal pixel position of the matching animal on the LEFT side (estimate 50-200)
+- target_y: vertical pixel position of the matching animal on the LEFT side (estimate 50-400)
 
 If you cannot determine, return: {"skip": true}
-Return ONLY the JSON.`,
+Return ONLY the JSON, no explanation.`,
           }),
         });
         const aiResult = await resp.json();
@@ -160,44 +160,58 @@ Return ONLY the JSON.`,
         await chrome.scripting.executeScript({
           target: { tabId, allFrames: true },
           func: (sol) => {
-            // Only run inside the hCaptcha challenge frame
-            if (!document.querySelector('.challenge-container, [class*="challenge"], .task-image')) return false;
+            // Find hCaptcha challenge elements
+            const challenge = document.querySelector('.challenge-container, [class*="challenge"], .task-image, .challenge-image');
+            if (!challenge) return false;
 
-            // Find Move buttons (these are the drag sources)
-            const moveBtns = document.querySelectorAll('.move-button, [class*="move"], [aria-label*="Move"]');
-            if (moveBtns.length === 0) return false;
+            // Find Move buttons (drag sources) - they have "Move" text
+            const allElements = document.querySelectorAll('*');
+            const moveButtons = [];
+            allElements.forEach(el => {
+              if (el.textContent && el.textContent.trim() === 'Move' && el.offsetParent !== null) {
+                moveButtons.push(el);
+              }
+            });
 
-            // Pick the source by index (0=top, 1=middle, 2=bottom)
-            const sourceBtn = moveBtns[Math.min(sol.source, moveBtns.length - 1)];
+            // Also try aria-label or class-based selection
+            if (moveButtons.length === 0) {
+              document.querySelectorAll('[aria-label*="Move"], [class*="move-button"], [class*="draggable"]').forEach(el => {
+                if (el.offsetParent !== null) moveButtons.push(el);
+              });
+            }
+
+            if (moveButtons.length === 0) return false;
+
+            // Pick source by index
+            const sourceBtn = moveButtons[Math.min(sol.source, moveButtons.length - 1)];
             if (!sourceBtn) return false;
 
-            // Find the parent draggable element
-            const sourceCard = sourceBtn.closest('[class*="card"], [class*="item"], [class*="source"]') || sourceBtn.parentElement;
-            const srcRect = sourceCard.getBoundingClientRect();
+            // Get source center position
+            const srcRect = sourceBtn.getBoundingClientRect();
             const startX = srcRect.left + srcRect.width / 2;
             const startY = srcRect.top + srcRect.height / 2;
 
-            // Target position
+            // Target is on the LEFT side
             const tgtX = sol.target_x;
             const tgtY = sol.target_y;
 
-            // Perform drag with realistic movement
-            sourceCard.dispatchEvent(new MouseEvent('mousedown', {
+            // Perform realistic drag
+            sourceBtn.dispatchEvent(new MouseEvent('mousedown', {
               clientX: startX, clientY: startY, bubbles: true, cancelable: true
             }));
 
-            // Move in human-like steps with slight randomness
-            const steps = 20;
+            // Human-like movement with easing
+            const steps = 25;
             for (let i = 1; i <= steps; i++) {
-              const progress = i / steps;
-              const x = startX + (tgtX - startX) * progress;
-              const y = startY + (tgtY - startY) * progress + (Math.random() - 0.5) * 2;
+              const t = i / steps;
+              const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+              const x = startX + (tgtX - startX) * eased;
+              const y = startY + (tgtY - startY) * eased + (Math.random() - 0.5) * 1.5;
               document.dispatchEvent(new MouseEvent('mousemove', {
                 clientX: x, clientY: y, bubbles: true, cancelable: true
               }));
             }
 
-            // Release at target
             document.dispatchEvent(new MouseEvent('mouseup', {
               clientX: tgtX, clientY: tgtY, bubbles: true, cancelable: true
             }));
