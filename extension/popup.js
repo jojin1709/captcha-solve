@@ -237,12 +237,27 @@ Return ONLY numbers of matching squares, comma-separated. Example: 1,3,7. If non
       const indices = nums.map(n => parseInt(n) - 1);
       log(`Clicking tiles: [${indices.join(", ")}]`);
 
-      // Inject clicks into reCAPTCHA challenge frame
+      // Find the reCAPTCHA challenge frame ID
+      const allFrames = await chrome.scripting.getAllFrames({ tabId: tab.id });
+      let challengeFrameId = null;
+      for (const frame of (allFrames || [])) {
+        const url = (frame.url || "").toLowerCase();
+        if (url.includes("recaptcha") && (url.includes("bframe") || url.includes("anchor") || url.includes("enterprise"))) {
+          challengeFrameId = frame.frameId;
+        }
+      }
+
+      if (!challengeFrameId) {
+        log("Could not find reCAPTCHA frame", "err");
+        return;
+      }
+      log(`Found reCAPTCHA frame: ${challengeFrameId}`);
+
+      // Inject clicks into the SPECIFIC reCAPTCHA challenge frame only
       const injectResult = await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
+        target: { tabId: tab.id, frameIds: [challengeFrameId] },
         world: "MAIN",
         func: (tileIndices) => {
-          // Try multiple selectors for reCAPTCHA tiles
           let tiles = document.querySelectorAll('td.rc-imageselect-tile');
           if (tiles.length === 0) tiles = document.querySelectorAll('td[role="button"]');
           if (tiles.length === 0) tiles = document.querySelectorAll('.rc-imageselect-checkbox');
