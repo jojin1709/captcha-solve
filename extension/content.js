@@ -489,28 +489,49 @@
   }
 
   // ---- Main: detect and solve ----
+  function findAllCaptchaFrames() {
+    const frames = [];
+    document.querySelectorAll("iframe").forEach(f => {
+      const src = (f.src || "").toLowerCase();
+      const title = (f.title || "").toLowerCase();
+      if (src.includes("recaptcha") || src.includes("google.com/recaptcha") ||
+          title.includes("recaptcha") || title.includes("challenge")) {
+        frames.push({ type: "recaptcha", el: f, src });
+      } else if (src.includes("hcaptcha")) {
+        frames.push({ type: "hcaptcha", el: f, src });
+      } else if (src.includes("challenges.cloudflare")) {
+        frames.push({ type: "turnstile", el: f, src });
+      }
+    });
+    // Also check for g-recaptcha div
+    document.querySelectorAll(".g-recaptcha, [data-sitekey]").forEach(el => {
+      frames.push({ type: "recaptcha", el, src: "" });
+    });
+    return frames;
+  }
+
   async function detectAndSolve() {
     if (!settings.autoSolve) return { error: "Auto-solve disabled" };
 
-    // 1. reCAPTCHA
-    if (document.querySelector('iframe[src*="recaptcha"]')) {
-      log("Detected reCAPTCHA v2");
-      const r = await solveReCaptchaV2();
-      if (r) return r;
-    }
+    const frames = findAllCaptchaFrames();
+    log(`Found ${frames.length} captcha frame(s)`);
 
-    // 2. hCaptcha
-    if (document.querySelector('iframe[src*="hcaptcha"]')) {
-      log("Detected hCaptcha");
-      const r = await solveHCaptcha();
-      if (r) return r;
-    }
-
-    // 3. Turnstile
-    if (document.querySelector('iframe[src*="challenges.cloudflare.com"]')) {
-      log("Detected Turnstile");
-      const r = await solveTurnstile();
-      if (r) return r;
+    for (const frame of frames) {
+      if (frame.type === "recaptcha") {
+        log("Detected reCAPTCHA");
+        const r = await solveReCaptchaV2();
+        if (r) return r;
+      }
+      if (frame.type === "hcaptcha") {
+        log("Detected hCaptcha");
+        const r = await solveHCaptcha();
+        if (r) return r;
+      }
+      if (frame.type === "turnstile") {
+        log("Detected Turnstile");
+        const r = await solveTurnstile();
+        if (r) return r;
+      }
     }
 
     // 4. Image captcha
@@ -527,21 +548,20 @@
   // ---- Auto-detect on load ----
   function autoDetect() {
     if (!settings.autoSolve) return;
-    const selectors = [
-      'iframe[src*="recaptcha"]', 'iframe[src*="hcaptcha"]',
-      'iframe[src*="challenges.cloudflare.com"]',
-      'img[src*="captcha" i]', 'img[alt*="captcha" i]',
-    ];
-    for (const sel of selectors) {
-      if (document.querySelector(sel)) {
-        log(`Auto-detected: ${sel}`);
-        detectAndSolve().catch(console.error);
-        return;
-      }
+    const frames = findAllCaptchaFrames();
+    if (frames.length > 0) {
+      log(`Auto-detected ${frames.map(f => f.type).join(", ")}`);
+      detectAndSolve().catch(console.error);
+      return;
+    }
+    // Also check for image captchas
+    if (document.querySelector('img[src*="captcha" i], img[alt*="captcha" i]')) {
+      log("Auto-detected image captcha");
+      detectAndSolve().catch(console.error);
     }
   }
 
-  setTimeout(autoDetect, 2500);
-  new MutationObserver(() => setTimeout(autoDetect, 2000))
+  setTimeout(autoDetect, 1500);
+  new MutationObserver(() => setTimeout(autoDetect, 1000))
     .observe(document.body, { childList: true, subtree: true });
 })();

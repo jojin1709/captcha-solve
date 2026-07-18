@@ -39,9 +39,20 @@ def home():
     return jsonify({"ok": True, "name": "Captcha Solver API", "version": "1.0.0"})
 
 
-@app.route("/status", methods=["GET"])
+@app.route("/status", methods=["GET", "POST"])
 def status():
-    return jsonify({"ok": True, "note": "Keys sent per-request from extension"})
+    if request.method == "POST":
+        data = request.json or {}
+        k = data.get("api_keys", {})
+        ai = _ai(k)
+        tc = _tc(k)
+        return jsonify({
+            "ok": True,
+            "ai_available": ai is not None and ai.available(),
+            "ai_providers": ai.providers() if ai else [],
+            "twocaptcha_available": tc is not None,
+        })
+    return jsonify({"ok": True, "note": "Send POST with api_keys to check engines"})
 
 
 @app.route("/solve/image", methods=["POST"])

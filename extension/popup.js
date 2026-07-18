@@ -105,14 +105,27 @@ function getKeys() {
 
 async function checkServer() {
   try {
-    const resp = await fetch(`${getServerUrl()}/status`, { signal: AbortSignal.timeout(3000) });
+    const keys = await getKeys();
+    const hasKeys = Object.values(keys).some(v => v && v.trim());
+    const resp = await fetch(`${getServerUrl()}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_keys: keys }),
+      signal: AbortSignal.timeout(5000),
+    });
     const data = await resp.json();
     if (data.ok) {
       statusDot.classList.add("ok");
       const parts = [];
       if (data.ai_providers && data.ai_providers.length) parts.push(data.ai_providers.join("+"));
       if (data.twocaptcha_available) parts.push("2Captcha");
-      statusText.textContent = parts.length ? `Server OK (${parts.join(" + ")})` : "Server OK (no engines)";
+      if (parts.length) {
+        statusText.textContent = `Server OK (${parts.join(" + ")})`;
+      } else if (hasKeys) {
+        statusText.textContent = "Server OK (keys sent, engines loading...)";
+      } else {
+        statusText.textContent = "Server OK — add API key in Settings";
+      }
       log("Server connected", "ok");
     }
   } catch (e) {
