@@ -69,11 +69,8 @@ function loadSettings() {
         if (el) el.value = v;
       }
     }
-    // Auto-sync keys to storage
     const keys = getKeys();
-    if (Object.keys(keys).length > 0) {
-      chrome.storage.local.set({ keys });
-    }
+    if (Object.keys(keys).length > 0) chrome.storage.local.set({ keys });
     setTimeout(checkServer, 500);
   });
 }
@@ -107,100 +104,33 @@ async function checkServer() {
   }
 }
 
-// ---- API call ----
-async function apiCall(path, body) {
-  const keys = getKeys();
-  body.api_keys = keys;
-  log(`Calling ${path} with ${Object.keys(keys).length} key(s)...`);
-  const resp = await fetch(`${getServerUrl()}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const json = await resp.json();
-  if (json.error) throw new Error(json.error);
-  return json;
-}
-
-// ---- Capture screenshot ----
-function captureTab() {
-  return new Promise((resolve) => {
-    chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
-      if (chrome.runtime.lastError || !dataUrl) resolve(null);
-      else resolve(dataUrl.split(",")[1]);
-    });
-  });
-}
-
-// ---- Get current tab ----
-async function getTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab;
-}
-
-// ---- Solve button ----
+// ---- Solve button → background does everything ----
 solveBtn.addEventListener("click", async () => {
   solveBtn.disabled = true;
   solveBtn.textContent = "Solving...";
+  log("Sending to background solver...");
 
   try {
-    const tab = await getTab();
-    log("Capturing screenshot...");
-    const screenshot = await captureTab();
-    if (!screenshot) { log("Screenshot failed", "err"); return; }
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-    log("Sending to AI...");
-    const result = await apiCall("/solve/image", {
-      image_base64: screenshot,
-      prompt: `This is a reCAPTCHA image challenge. The instruction says: "Select all squares with [object]".
-The grid is 4x4 or 3x3. Numbered left-to-right, top-to-bottom starting from 1.
-Return ONLY the numbers of squares containing the target object, separated by commas.
-Example: 1,3,7
-If none match, return: 0`,
-    });
-
-    if (result.answer) {
-      log(`AI says: ${result.answer}`, "ok");
-
-      const nums = result.answer.match(/\d+/g);
-      if (nums && nums.length > 0 && !(nums.length === 1 && nums[0] === "0")) {
-        const indices = nums.map(n => parseInt(n) - 1);
-        log(`Clicking tiles: ${indices.join(", ")}`);
-
-        // Inject click script into ALL frames on the page
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          allFrames: true,
-          func: (tileIndices) => {
-            // Find reCAPTCHA tile elements
-            const tiles = document.querySelectorAll(
-              'td[role="button"], .rc-imageselect-tile, table.rc-imageselect-table-33 td, table.rc-imageselect-table-44 td, .rc-imageselect-checkbox'
-            );
-            if (tiles.length === 0) return false;
-
-            tileIndices.forEach(i => {
-              if (tiles[i]) {
-                tiles[i].click();
-              }
-            });
-
-            // Click verify after a delay
-            setTimeout(() => {
-              const verify = document.querySelector('#recaptcha-verify-button, .rc-button-default');
-              if (verify) verify.click();
-            }, 1500);
-            return true;
-          },
-          args: [indices],
-        });
-        log("Clicked tiles and verify!", "ok");
-      } else {
-        log("AI found no matching tiles", "err");
+    chrome.runtime.sendMessage(
+      { type: "SOLVE_RECAPTCHA", tabId: tab.id },
+      (response) => {
+        void chrome.runtime.lastError;
+        if (response && response.success) {
+          log(`Solved! Clicked tiles: [${response.tiles.join(", ")}]`, "ok");
+          log(`AI identified: ${response.aiAnswer}`, "ok");
+        } else if (response && response.error) {
+          log(`Error: ${response.error}`, "err");
+        } else {
+          log("No response from background", "err");
+        }
+        solveBtn.disabled = false;
+        solveBtn.textContent = "Solve CAPTCHA on This Page";
       }
-    }
+    );
   } catch (e) {
     log(`Error: ${e.message}`, "err");
-  } finally {
     solveBtn.disabled = false;
     solveBtn.textContent = "Solve CAPTCHA on This Page";
   }

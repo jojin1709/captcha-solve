@@ -1,6 +1,5 @@
-// Background service worker
+// Background service worker — handles screenshot, AI, and frame injection
 
-// Keep alive
 let keepAliveInterval;
 chrome.runtime.onInstalled.addListener(() => {
   keepAliveInterval = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 25000);
@@ -17,17 +16,18 @@ function getKeys() {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+
   // API proxy
   if (msg.type === "API_REQUEST") {
     (async () => {
       try {
         const serverUrl = await getServerUrl();
         const keys = await getKeys();
-        const body = { ...msg.body, api_keys: keys };
+        msg.body.api_keys = keys;
         const resp = await fetch(`${serverUrl}${msg.path}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify(msg.body),
         });
         sendResponse(await resp.json());
       } catch (e) {
@@ -37,47 +37,89 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
 
-  // Screenshot capture
+  // Screenshot
   if (msg.type === "CAPTURE_TAB") {
     chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
-      if (chrome.runtime.lastError) {
-        sendResponse({ error: chrome.runtime.lastError.message });
-      } else {
-        sendResponse({ base64: dataUrl.split(",")[1] });
-      }
+      if (chrome.runtime.lastError || !dataUrl) sendResponse({ error: "capture failed" });
+      else sendResponse({ base64: dataUrl.split(",")[1] });
     });
     return true;
   }
 
-  // Inject solver into reCAPTCHA iframe
-  if (msg.type === "INJECT_RECAPTCHA_SOLVER") {
-    const { frameId, tileIndices } = msg;
-    chrome.scripting.executeScript({
-      target: { tabId: sender.tab.id, frameIds: [frameId] },
-      func: (indices) => {
-        const tiles = document.querySelectorAll('td[role="button"], .rc-imageselect-tile, table.rc-imageselect-table-33 td');
-        indices.forEach(i => {
-          if (tiles[i]) {
-            tiles[i].click();
-          }
+  // Full solve: screenshot → AI → inject clicks
+  if (msg.type === "SOLVE_RECAPTCHA") {
+    (async () => {
+      try {
+        // 1. Capture screenshot
+        const screenshot = await new Promise((resolve) => {
+          chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+            if (chrome.runtime.lastError || !dataUrl) resolve(null);
+            else resolve(dataUrl.split(",")[1]);
+          });
         });
-        setTimeout(() => {
-          const btn = document.querySelector('#recaptcha-verify-button');
-          if (btn) btn.click();
-        }, 1000);
-      },
-      args: [tileIndices],
-    }, () => {
-      sendResponse({ ok: true });
-    });
-    return true;
-  }
 
-  // Get all frame IDs for a tab
-  if (msg.type === "GET_FRAMES") {
-    chrome.scripting.getAllFrames({ tabId: sender.tab.id }, (frames) => {
-      sendResponse({ frames: frames || [] });
-    });
+        if (!screenshot) {
+          sendResponse({ error: "Screenshot failed" });
+          return;
+        }
+
+        // 2. Send to AI
+        const keys = await getKeys();
+        const serverUrl = await getServerUrl();
+        const resp = await fetch(`${serverUrl}/solve/image`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_keys: keys,
+            image_base64: screenshot,
+            prompt: `This is a reCAPTCHA image challenge. The instruction says to "Select all squares with [object]".
+The grid is 4x4 or 3x3. Numbered left-to-right, top-to-bottom starting from 1.
+Return ONLY the numbers of squares containing the target object, separated by commas.
+Example: 1,3,7
+If none match, return: 0`,
+          }),
+        });
+        const aiResult = await resp.json();
+
+        if (aiResult.error) {
+          sendResponse({ error: aiResult.error });
+          return;
+        }
+
+        // 3. Parse tile numbers
+        const nums = (aiResult.answer || "").match(/\d+/g);
+        if (!nums || nums.length === 0 || (nums.length === 1 && nums[0] === "0")) {
+          sendResponse({ error: "AI found no matching tiles", aiAnswer: aiResult.answer });
+          return;
+        }
+
+        const indices = nums.map(n => parseInt(n) - 1);
+
+        // 4. Inject clicks into ALL frames
+        const tabId = sender.tab ? sender.tab.id : msg.tabId;
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          allFrames: true,
+          func: (tileIndices) => {
+            const tiles = document.querySelectorAll(
+              'td[role="button"], .rc-imageselect-tile, table.rc-imageselect-table-33 td, table.rc-imageselect-table-44 td'
+            );
+            if (tiles.length === 0) return false;
+            tileIndices.forEach(i => { if (tiles[i]) tiles[i].click(); });
+            setTimeout(() => {
+              const btn = document.querySelector('#recaptcha-verify-button, .rc-button-default');
+              if (btn) btn.click();
+            }, 1500);
+            return true;
+          },
+          args: [indices],
+        });
+
+        sendResponse({ success: true, tiles: indices, aiAnswer: aiResult.answer });
+      } catch (e) {
+        sendResponse({ error: e.message });
+      }
+    })();
     return true;
   }
 });
