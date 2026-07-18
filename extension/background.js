@@ -1,17 +1,12 @@
-// Background service worker - keep alive and proxy API calls
+// Background service worker
 
-// Keep service worker alive
+// Keep alive
 let keepAliveInterval;
 chrome.runtime.onInstalled.addListener(() => {
-  keepAliveInterval = setInterval(() => {
-    chrome.runtime.getPlatformInfo(() => {});
-  }, 25000);
+  keepAliveInterval = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 25000);
 });
-
 chrome.runtime.onStartup.addListener(() => {
-  keepAliveInterval = setInterval(() => {
-    chrome.runtime.getPlatformInfo(() => {});
-  }, 25000);
+  keepAliveInterval = setInterval(() => chrome.runtime.getPlatformInfo(() => {}), 25000);
 });
 
 function getServerUrl() {
@@ -48,9 +43,40 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (chrome.runtime.lastError) {
         sendResponse({ error: chrome.runtime.lastError.message });
       } else {
-        const base64 = dataUrl.split(",")[1];
-        sendResponse({ base64 });
+        sendResponse({ base64: dataUrl.split(",")[1] });
       }
+    });
+    return true;
+  }
+
+  // Inject solver into reCAPTCHA iframe
+  if (msg.type === "INJECT_RECAPTCHA_SOLVER") {
+    const { frameId, tileIndices } = msg;
+    chrome.scripting.executeScript({
+      target: { tabId: sender.tab.id, frameIds: [frameId] },
+      func: (indices) => {
+        const tiles = document.querySelectorAll('td[role="button"], .rc-imageselect-tile, table.rc-imageselect-table-33 td');
+        indices.forEach(i => {
+          if (tiles[i]) {
+            tiles[i].click();
+          }
+        });
+        setTimeout(() => {
+          const btn = document.querySelector('#recaptcha-verify-button');
+          if (btn) btn.click();
+        }, 1000);
+      },
+      args: [tileIndices],
+    }, () => {
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+
+  // Get all frame IDs for a tab
+  if (msg.type === "GET_FRAMES") {
+    chrome.scripting.getAllFrames({ tabId: sender.tab.id }, (frames) => {
+      sendResponse({ frames: frames || [] });
     });
     return true;
   }

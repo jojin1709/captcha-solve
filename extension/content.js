@@ -140,7 +140,6 @@
   async function solveReCaptcha() {
     log("Solving reCAPTCHA v2...");
 
-    // Find anchor (checkbox) iframe
     const anchor = document.querySelector(
       'iframe[src*="recaptcha"][src*="anchor"], iframe[title*="reCAPTCHA"], iframe[title*="recaptcha"]'
     );
@@ -153,25 +152,21 @@
 
     // Click checkbox
     await safeClick(anchor);
-    log("Clicked checkbox, waiting for challenge...");
+    log("Clicked checkbox, waiting...");
     await sleep(3000);
 
-    // Check if already solved (no challenge appeared)
+    // Check if solved
     const ta = document.querySelector('textarea[name="g-recaptcha-response"]');
     if (ta && ta.value && ta.value.length > 10) {
-      log("Already solved!");
       notify("reCAPTCHA solved!");
       autoSubmit();
       return { answer: ta.value, engine: "browser" };
     }
 
-    // Wait for challenge iframe to appear (up to 5 seconds)
+    // Wait for challenge iframe
     let challenge = null;
     for (let i = 0; i < 10; i++) {
-      challenge = document.querySelector(
-        'iframe[src*="bframe"], iframe[title*="challenge"], iframe[src*="recaptcha"][src*="bframe"]'
-      );
-      // Also check for any recaptcha iframe that's not the anchor
+      challenge = document.querySelector('iframe[src*="bframe"], iframe[title*="challenge"]');
       if (!challenge) {
         document.querySelectorAll('iframe[src*="recaptcha"]').forEach(f => {
           if (f !== anchor && !challenge) challenge = f;
@@ -182,93 +177,123 @@
     }
 
     if (!challenge) {
-      // No challenge = might be solved already
-      if (ta && ta.value) {
-        notify("reCAPTCHA solved!");
-        autoSubmit();
-        return { answer: ta.value, engine: "browser" };
-      }
-      log("No challenge appeared");
+      if (ta && ta.value) { notify("reCAPTCHA solved!"); autoSubmit(); return { answer: ta.value, engine: "browser" }; }
       return null;
     }
 
-    log("Challenge detected! Sending to AI for image selection...");
+    log("Challenge found! Getting frame info...");
 
-    // Take screenshot and send to AI
-    try {
-      const screenshot = await captureTab();
-      if (screenshot) {
-        const result = await apiCall("/solve/image", {
-          image_base64: screenshot,
-          prompt: `This is a reCAPTCHA image challenge. The instruction says: "Select all images with [object]".
-Look at the 3x3 grid of images. The grid is numbered 1-9, left to right, top to bottom.
-Return ONLY the numbers of the images that match, separated by commas. Example: 1,3,7
-If none match, return: 0`,
+    // Get the frame ID from background
+    const frameInfo = await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: "GET_FRAMES" }, (resp) => {
+          resolve(resp || { frames: [] });
         });
+      } catch (_) { resolve({ frames: [] }); }
+    });
 
-        if (result.answer) {
-          log(`AI says: ${result.answer}`);
-
-          // Parse tile numbers
-          const numbers = result.answer.match(/\d+/g);
-          if (numbers && numbers.length > 0 && !(numbers.length === 1 && numbers[0] === "0")) {
-            // Click the tiles inside the challenge iframe
-            try {
-              // Try to access the challenge iframe content
-              const challengeDoc = challenge.contentDocument || challenge.contentWindow.document;
-              const tiles = challengeDoc.querySelectorAll('td[role="button"], .rc-imageselect-tile, table td');
-              log(`Found ${tiles.length} tiles in challenge`);
-
-              for (const n of numbers) {
-                const idx = parseInt(n) - 1;
-                if (idx >= 0 && idx < tiles.length) {
-                  tiles[idx].click();
-                  await sleep(300);
-                  log(`Clicked tile ${n}`);
-                }
-              }
-
-              // Click verify button
-              await sleep(1000);
-              const verifyBtn = challengeDoc.querySelector('#recaptcha-verify-button, .rc-button-default');
-              if (verifyBtn) {
-                verifyBtn.click();
-                log("Clicked verify");
-                await sleep(2000);
-              }
-            } catch (crossOrigin) {
-              log(`Cannot access challenge iframe (cross-origin): ${crossOrigin.message}`);
-              // Fallback: send to server for 2Captcha solve
-              const result2 = await apiCall("/solve/recaptcha", { sitekey, url: location.href, version: "v2" });
-              if (result2.answer) {
-                if (ta) { ta.value = result2.answer; ta.dispatchEvent(new Event("input", { bubbles: true })); }
-                notify("reCAPTCHA solved!");
-                autoSubmit();
-                return result2;
-              }
-            }
-
-            // Check result
-            if (ta && ta.value && ta.value.length > 10) {
-              notify("reCAPTCHA solved!");
-              autoSubmit();
-              return { answer: ta.value, engine: "ai" };
-            }
-          }
+    // Find the challenge frame ID
+    const challengeSrc = challenge.src || "";
+    let challengeFrameId = null;
+    for (const frame of (frameInfo.frames || [])) {
+      if (frame.url && (frame.url.includes("bframe") || frame.url.includes("recaptcha") || frame.url.includes("challenge"))) {
+        if (frame.frameId !== undefined) {
+          challengeFrameId = frame.frameId;
+          break;
         }
       }
+    }
 
-      // Fallback: try 2Captcha API
-      const result3 = await apiCall("/solve/recaptcha", { sitekey, url: location.href, version: "v2" });
-      if (result3.answer) {
-        if (ta) { ta.value = result3.answer; ta.dispatchEvent(new Event("input", { bubbles: true })); }
+    log(`Challenge frame ID: ${challengeFrameId}`);
+
+    // Capture screenshot
+    const screenshot = await captureTab();
+    if (!screenshot) {
+      log("No screenshot, skipping...");
+      return null;
+    }
+
+    // Ask AI which tiles to click
+    log("Sending screenshot to AI...");
+    const result = await apiCall("/solve/image", {
+      image_base64: screenshot,
+      prompt: `This is a reCAPTCHA image challenge. The instruction says: "Select all squares with [object]".
+The grid is 4x4 or 3x3. Numbered left-to-right, top-to-bottom starting from 1.
+Return ONLY the numbers of squares containing the target object, separated by commas.
+Example: 1,3,7
+If none match, return: 0`,
+    });
+
+    if (!result.answer) {
+      log("AI returned no answer");
+      return null;
+    }
+
+    log(`AI says: ${result.answer}`);
+
+    // Parse numbers
+    const nums = result.answer.match(/\d+/g);
+    if (!nums || nums.length === 0 || (nums.length === 1 && nums[0] === "0")) {
+      log("AI says no matches, skipping...");
+      return null;
+    }
+
+    const tileIndices = nums.map(n => parseInt(n) - 1);
+    log(`Clicking tiles: ${tileIndices.join(", ")}`);
+
+    // Inject script into the challenge frame to click tiles
+    if (challengeFrameId !== null) {
+      await new Promise((resolve) => {
+        chrome.runtime.sendMessage({
+          type: "INJECT_RECAPTCHA_SOLVER",
+          frameId: challengeFrameId,
+          tileIndices: tileIndices,
+        }, () => { resolve(); });
+      });
+      log("Injected click script into challenge frame");
+      await sleep(3000);
+
+      // Check result
+      const ta2 = document.querySelector('textarea[name="g-recaptcha-response"]');
+      if (ta2 && ta2.value && ta2.value.length > 10) {
         notify("reCAPTCHA solved!");
         autoSubmit();
-        return result3;
+        return { answer: ta2.value, engine: "ai" };
       }
-    } catch (e) {
-      log(`reCAPTCHA solve failed: ${e.message}`);
+    } else {
+      log("Could not find challenge frame ID, trying direct injection...");
+      // Try injecting into all recaptcha frames
+      try {
+        chrome.scripting.executeScript({
+          target: { tabId: (await new Promise(r => chrome.tabs.query({active:true,currentWindow:true}, tabs => r(tabs[0].id)))) },
+          allFrames: true,
+          func: (indices) => {
+            if (!document.querySelector('td[role="button"]') && !document.querySelector('.rc-imageselect-tile')) return false;
+            const tiles = document.querySelectorAll('td[role="button"], .rc-imageselect-tile, table.rc-imageselect-table-33 td, table.rc-imageselect-table-44 td');
+            indices.forEach(i => { if (tiles[i]) tiles[i].click(); });
+            setTimeout(() => {
+              const btn = document.querySelector('#recaptcha-verify-button');
+              if (btn) btn.click();
+            }, 1000);
+            return true;
+          },
+          args: [tileIndices],
+        });
+        log("Injected via allFrames");
+      } catch (e) {
+        log(`Injection failed: ${e.message}`);
+      }
     }
+
+    await sleep(3000);
+    const ta3 = document.querySelector('textarea[name="g-recaptcha-response"]');
+    if (ta3 && ta3.value && ta3.value.length > 10) {
+      notify("reCAPTCHA solved!");
+      autoSubmit();
+      return { answer: ta3.value, engine: "ai" };
+    }
+
+    log("Not solved yet, may need retry");
     return null;
   }
 
