@@ -37,7 +37,7 @@ class AIEngine:
             try:
                 from openai import OpenAI
                 client = OpenAI(api_key=key, base_url="https://api.x.ai/v1")
-                self._fallback_chain.append(("grok", client, "grok-2-vision-latest"))
+                self._fallback_chain.append(("grok", client, "grok-2-vision-1212"))
                 print("[AI] Grok ready")
             except Exception as e:
                 print(f"[AI] Grok init failed: {e}")
@@ -48,7 +48,7 @@ class AIEngine:
             try:
                 from openai import OpenAI
                 client = OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1")
-                self._fallback_chain.append(("groq", client, "llama-3.2-90b-vision-preview"))
+                self._fallback_chain.append(("groq", client, "llama-3.2-11b-vision-preview"))
                 print("[AI] Groq ready")
             except Exception as e:
                 print(f"[AI] Groq init failed: {e}")
