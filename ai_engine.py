@@ -42,16 +42,9 @@ class AIEngine:
             except Exception as e:
                 print(f"[AI] Grok init failed: {e}")
 
-        # --- Groq (fast, free) ---
-        key = keys.get("groq") or os.getenv("GROQ_API_KEY")
-        if key:
-            try:
-                from openai import OpenAI
-                client = OpenAI(api_key=key, base_url="https://api.groq.com/openai/v1")
-                self._fallback_chain.append(("groq", client, "llama-3.2-11b-vision-preview"))
-                print("[AI] Groq ready")
-            except Exception as e:
-                print(f"[AI] Groq init failed: {e}")
+        # --- Groq (text only - no free vision models) ---
+        # Groq does NOT have vision models on free tier
+        # Skipping Groq for vision tasks
 
         # --- OpenRouter ---
         key = keys.get("openrouter") or os.getenv("OPENROUTER_API_KEY")
