@@ -105,9 +105,16 @@ def solve_image():
                 image_url=data.get("image_url"),
                 prompt=data.get("prompt", "Read the text in this captcha image. Return only the text."),
             )
-            return jsonify({"answer": answer.strip(), "engine": "ai", "version": "1.4"})
+            return jsonify({"answer": answer.strip(), "engine": "ai", "version": "1.5"})
         except Exception as e:
-            print(f"[AI] image failed: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            return jsonify({"error": f"AI failed: {e}", "version": "1.5"}), 500
+
+    if not ai:
+        return jsonify({"error": "AI engine failed to create", "version": "1.5", "keys_received": list(k.keys())}), 503
+    if not ai.available():
+        return jsonify({"error": "AI engine has no providers", "version": "1.5", "providers": ai.providers()}), 503
 
     tc = _tc(k)
     if tc:
