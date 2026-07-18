@@ -30,8 +30,28 @@
     }
   });
 
-  // ---- Direct server call (no background needed) ----
+  // ---- Server call with fallback ----
   async function apiCall(path, body) {
+    // Try background first (more reliable for storage access)
+    try {
+      const bgResult = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+          { type: "API_REQUEST", path, body },
+          (resp) => {
+            if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+            else if (!resp) reject(new Error("No response"));
+            else resolve(resp);
+          }
+        );
+        setTimeout(() => reject(new Error("timeout")), 15000);
+      });
+      if (bgResult.error) throw new Error(bgResult.error);
+      return bgResult;
+    } catch (bgError) {
+      log(`Background failed (${bgError.message}), trying direct fetch...`);
+    }
+
+    // Fallback: direct fetch
     const data = await new Promise((resolve) => {
       chrome.storage.local.get(["serverUrl", "keys"], (d) => {
         resolve({
@@ -40,7 +60,6 @@
         });
       });
     });
-
     body.api_keys = data.keys;
     const resp = await fetch(`${data.serverUrl}${path}`, {
       method: "POST",

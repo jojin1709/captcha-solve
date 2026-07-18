@@ -78,7 +78,13 @@ function loadSettings() {
         if (el) el.value = v;
       }
     }
-    // Auto-check server after loading
+    // Auto-save keys from inputs to storage (fixes empty storage issue)
+    const keys = getKeys();
+    if (Object.keys(keys).length > 0) {
+      chrome.storage.local.set({ keys }, () => {
+        log("Keys synced to storage", "ok");
+      });
+    }
     setTimeout(checkServer, 500);
   });
 }
