@@ -345,6 +345,15 @@ def _solve_turnstile_selenium(driver, url):
 
 # ---- API Routes ----
 
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({
+        "ok": True,
+        "name": "Captcha Solver API",
+        "version": "1.0.0",
+        "endpoints": ["/status", "/setup", "/solve/image", "/solve/recaptcha", "/solve/hcaptcha", "/solve/turnstile", "/solve/puzzle", "/solve/audio"],
+    })
+
 @app.route("/status", methods=["GET"])
 def status():
     _init_engines()
