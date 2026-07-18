@@ -116,7 +116,7 @@ def solve_image():
         except Exception as e:
             print(f"[2Captcha] image failed: {e}")
 
-    return jsonify({"error": "Add Grok/Gemini/OpenRouter key in extension Settings"}), 503
+    return jsonify({"error": "Add Grok/Gemini/OpenRouter key in extension Settings", "version": "1.3"}), 503
 
 
 @app.route("/solve/recaptcha", methods=["POST"])
