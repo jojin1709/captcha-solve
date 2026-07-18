@@ -191,15 +191,26 @@
     const m = (frame.src || "").match(/sitekey=([A-Za-z0-9_-]+)/);
     if (m) sitekey = m[1];
 
+    // Click checkbox to start
     await safeClick(frame);
     await sleep(3000);
 
+    // Check if already solved
     const ta = document.querySelector('textarea[name="h-captcha-response"]');
     if (ta && ta.value && ta.value.length > 10) {
       notify("hCaptcha solved!");
+      autoSubmit();
       return { answer: ta.value, engine: "browser" };
     }
 
+    // Check for challenge iframe
+    const challengeFrame = document.querySelector('iframe[src*="hcaptcha"][src*="challenge"]');
+    if (challengeFrame) {
+      log("hCaptcha challenge detected, using AI screenshot...");
+      return await solveHCaptchaDragChallenge(frame, challengeFrame);
+    }
+
+    // Try API-based solve
     try {
       const result = await apiCall("/solve/hcaptcha", { sitekey, url: location.href });
       if (result.answer) {
@@ -211,6 +222,134 @@
       }
     } catch (e) { log(`hCaptcha failed: ${e.message}`); }
     return null;
+  }
+
+  // ---- hCaptcha Drag Challenge Solver (AI-powered) ----
+  async function solveHCaptchaDragChallenge(checkboxFrame, challengeFrame) {
+    try {
+      // Capture screenshot via background
+      log("Capturing screenshot...");
+      const screenshot = await captureVisibleTab();
+      if (!screenshot) {
+        log("Could not capture screenshot, trying API solve...");
+        return null;
+      }
+
+      log("Screenshot captured, sending to AI...");
+
+      // Send to AI for analysis
+      const result = await apiCall("/solve/hcaptcha-drag", {
+        screenshot_base64: screenshot,
+      });
+
+      if (result.answer) {
+        log(`AI response: ${result.answer}`);
+
+        let solution;
+        try {
+          const jsonMatch = result.answer.match(/\{[\s\S]*?\}/);
+          if (jsonMatch) solution = JSON.parse(jsonMatch[0]);
+        } catch (e) {
+          log(`Parse error: ${e.message}`);
+        }
+
+        if (solution && solution.skip) {
+          log("AI says skip");
+          await clickSkipInFrame(challengeFrame);
+          await sleep(2000);
+          return { answer: "skipped", engine: "ai" };
+        }
+
+        if (solution && solution.source_index !== undefined) {
+          log(`Drag animal ${solution.source_index} to (${solution.target_x}, ${solution.target_y})`);
+          await performDragInHcaptchaFrame(challengeFrame, solution);
+          await sleep(2000);
+
+          // Check result
+          const ta = document.querySelector('textarea[name="h-captcha-response"]');
+          if (ta && ta.value && ta.value.length > 10) {
+            notify("hCaptcha solved!");
+            autoSubmit();
+            return { answer: ta.value, engine: "ai" };
+          }
+          log("Drag completed but not solved yet, may need retry");
+        }
+      }
+    } catch (e) {
+      log(`hCaptcha drag failed: ${e.message}`);
+    }
+    return null;
+  }
+
+  // Capture visible tab via background script
+  function captureVisibleTab() {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: "CAPTURE_TAB" }, (resp) => {
+          if (chrome.runtime.lastError) {
+            resolve(null);
+          } else if (resp && resp.base64) {
+            resolve(resp.base64);
+          } else {
+            resolve(null);
+          }
+        });
+      } catch (e) {
+        resolve(null);
+      }
+    });
+  }
+
+  async function performDragInHcaptchaFrame(frame, solution) {
+    try {
+      const rect = frame.getBoundingClientRect();
+      // hCaptcha challenge is typically at a known position
+      // Source animals are on the left side (~50px from left)
+      const sourceX = rect.left + 60;
+      const sourceY = rect.top + 80 + (solution.source_index * 100); // approximate spacing
+
+      // Target is on the right side
+      const targetX = rect.left + (solution.target_x || 250);
+      const targetY = rect.top + (solution.target_y || 150);
+
+      log(`Drag from (${sourceX}, ${sourceY}) to (${targetX}, ${targetY})`);
+
+      // Perform drag
+      const el = document.elementFromPoint(sourceX, sourceY);
+      if (el) {
+        el.dispatchEvent(new MouseEvent("mousedown", { clientX: sourceX, clientY: sourceY, bubbles: true }));
+        await sleep(100);
+
+        // Move in steps for realism
+        const steps = 10;
+        for (let i = 1; i <= steps; i++) {
+          const x = sourceX + (targetX - sourceX) * (i / steps);
+          const y = sourceY + (targetY - sourceY) * (i / steps);
+          document.dispatchEvent(new MouseEvent("mousemove", { clientX: x, clientY: y, bubbles: true }));
+          await sleep(30);
+        }
+
+        document.dispatchEvent(new MouseEvent("mouseup", { clientX: targetX, clientY: targetY, bubbles: true }));
+        log("Drag completed");
+      }
+    } catch (e) {
+      log(`Drag failed: ${e.message}`);
+    }
+  }
+
+  async function clickSkipInFrame(frame) {
+    try {
+      const rect = frame.getBoundingClientRect();
+      // Skip button is usually at bottom right
+      const skipX = rect.left + rect.width - 60;
+      const skipY = rect.bottom - 20;
+      const el = document.elementFromPoint(skipX, skipY);
+      if (el) {
+        el.dispatchEvent(new MouseEvent("mousedown", { clientX: skipX, clientY: skipY, bubbles: true }));
+        el.dispatchEvent(new MouseEvent("mouseup", { clientX: skipX, clientY: skipY, bubbles: true }));
+        el.dispatchEvent(new MouseEvent("click", { clientX: skipX, clientY: skipY, bubbles: true }));
+      }
+    } catch (e) {}
   }
 
   // ---- Turnstile ----

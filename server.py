@@ -111,6 +111,41 @@ def solve_hcaptcha():
     return jsonify({"error": "hCaptcha needs 2Captcha API key."}), 503
 
 
+@app.route("/solve/hcaptcha-drag", methods=["POST"])
+def solve_hcaptcha_drag():
+    """AI-powered hCaptcha drag challenge solver."""
+    data = request.json or {}
+    k = data.get("api_keys", {})
+    ai = _ai(k)
+    screenshot_b64 = data.get("screenshot_base64")
+
+    if not ai or not ai.available():
+        return jsonify({"error": "AI needed for hCaptcha drag. Add Grok/Gemini key."}), 503
+    if not screenshot_b64:
+        return jsonify({"error": "No screenshot provided"}), 400
+
+    try:
+        prompt = (
+            "This is an hCaptcha drag challenge. The instruction says: "
+            "'Drag ONE character to the matching character behind the lines'.\n\n"
+            "Look at the image carefully:\n"
+            "- On the LEFT side, there are animal characters stacked vertically with 'Move' buttons\n"
+            "- On the RIGHT side, there are animal characters behind fence/grid lines\n\n"
+            "Your task: Which animal on the LEFT needs to be dragged, and where on the RIGHT is its matching character?\n\n"
+            "Return ONLY a JSON object like this:\n"
+            '{"source_index": 0, "target_x": 250, "target_y": 150}\n'
+            "- source_index: 0 for top animal, 1 for middle, 2 for bottom\n"
+            "- target_x: horizontal pixel position of the matching animal on the right (0-400)\n"
+            "- target_y: vertical pixel position of the matching animal (0-300)\n\n"
+            "If you cannot determine, return: {\"skip\": true}\n"
+            "Return ONLY the JSON, no explanation."
+        )
+        answer = ai.solve_image(image_b64=screenshot_b64, prompt=prompt)
+        return jsonify({"answer": answer, "engine": "ai"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/solve/turnstile", methods=["POST"])
 def solve_turnstile():
     data = request.json or {}

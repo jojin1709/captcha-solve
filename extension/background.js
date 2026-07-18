@@ -1,36 +1,44 @@
-// Background service worker - stays alive and proxies API calls
+// Background service worker
 
 function getServerUrl() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(["serverUrl"], (d) => resolve(d.serverUrl || "https://captcha-solve.vercel.app"));
-  });
+  return new Promise((r) => chrome.storage.local.get(["serverUrl"], (d) => r(d.serverUrl || "https://captcha-solve.vercel.app")));
 }
-
 function getKeys() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(["keys"], (d) => resolve(d.keys || {}));
-  });
+  return new Promise((r) => chrome.storage.local.get(["keys"], (d) => r(d.keys || {})));
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // API proxy
   if (msg.type === "API_REQUEST") {
     (async () => {
       try {
         const serverUrl = await getServerUrl();
         const keys = await getKeys();
         const body = { ...msg.body, api_keys: keys };
-
         const resp = await fetch(`${serverUrl}${msg.path}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
-        const data = await resp.json();
-        sendResponse(data);
+        sendResponse(await resp.json());
       } catch (e) {
         sendResponse({ error: e.message });
       }
     })();
+    return true;
+  }
+
+  // Screenshot capture
+  if (msg.type === "CAPTURE_TAB") {
+    chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+      if (chrome.runtime.lastError) {
+        sendResponse({ error: chrome.runtime.lastError.message });
+      } else {
+        // Convert data URL to base64
+        const base64 = dataUrl.split(",")[1];
+        sendResponse({ base64 });
+      }
+    });
     return true;
   }
 });
