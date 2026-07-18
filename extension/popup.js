@@ -108,13 +108,14 @@ async function checkServer() {
 solveBtn.addEventListener("click", async () => {
   solveBtn.disabled = true;
   solveBtn.textContent = "Solving...";
-  log("Sending to background solver...");
+  const keys = getKeys();
+  log(`Sending to background (${Object.keys(keys).length} keys)...`);
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
     chrome.runtime.sendMessage(
-      { type: "SOLVE_RECAPTCHA", tabId: tab.id },
+      { type: "SOLVE_RECAPTCHA", tabId: tab.id, keys: keys },
       (response) => {
         void chrome.runtime.lastError;
         if (response && response.success) {

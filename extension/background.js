@@ -63,8 +63,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return;
         }
 
-        // 2. Send to AI
-        const keys = await getKeys();
+        // 2. Send to AI (keys come directly from popup message)
+        const keys = msg.keys || {};
         const serverUrl = await getServerUrl();
         const resp = await fetch(`${serverUrl}/solve/image`, {
           method: "POST",
