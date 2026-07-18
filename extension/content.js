@@ -140,6 +140,7 @@
     if (ta && ta.value && ta.value.length > 10) {
       log("Already solved!");
       notify("reCAPTCHA solved!");
+      autoSubmit();
       return { answer: ta.value, engine: "browser" };
     }
 
@@ -148,6 +149,7 @@
     if (!challenge) {
       if (ta && ta.value) {
         notify("reCAPTCHA solved!");
+        autoSubmit();
         return { answer: ta.value, engine: "browser" };
       }
       log("No challenge and no token yet");
@@ -167,6 +169,7 @@
         }
         tryFireCallback("recaptcha", result.answer);
         notify("reCAPTCHA solved!");
+        autoSubmit();
         return result;
       }
     } catch (e) {
@@ -200,8 +203,10 @@
     try {
       const result = await apiCall("/solve/hcaptcha", { sitekey, url: location.href });
       if (result.answer) {
-        if (ta) { ta.value = result.result; ta.dispatchEvent(new Event("input", { bubbles: true })); }
+        if (ta) { ta.value = result.answer; ta.dispatchEvent(new Event("input", { bubbles: true })); }
+        tryFireCallback("hcaptcha", result.answer);
         notify("hCaptcha solved!");
+        autoSubmit();
         return result;
       }
     } catch (e) { log(`hCaptcha failed: ${e.message}`); }
@@ -266,6 +271,31 @@
       } catch (e) { log(`Image failed: ${e.message}`); }
     }
     return null;
+  }
+
+  // ---- Auto-submit after captcha solved ----
+  function autoSubmit() {
+    setTimeout(() => {
+      // Try clicking submit button
+      const btns = document.querySelectorAll(
+        'button[type="submit"], input[type="submit"], button:not([type="button"])'
+      );
+      for (const btn of btns) {
+        const text = (btn.textContent || btn.value || "").toLowerCase();
+        if (text.includes("submit") || text.includes("get result") || text.includes("verify") ||
+            text.includes("login") || text.includes("search") || text.includes("check")) {
+          log(`Auto-clicking: ${text}`);
+          safeClick(btn);
+          return;
+        }
+      }
+      // Try submitting the form directly
+      const form = document.querySelector("form");
+      if (form) {
+        log("Auto-submitting form");
+        form.submit();
+      }
+    }, 2000); // Wait 2s after solve for token to propagate
   }
 
   // ---- Callbacks ----

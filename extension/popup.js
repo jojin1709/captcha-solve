@@ -17,16 +17,16 @@ const solveBtn = document.getElementById("solveBtn");
 const logDiv = document.getElementById("log");
 const saveBtn = document.getElementById("saveBtn");
 const savedMsg = document.getElementById("savedMsg");
-
-const keyInputs = {
-  openai: document.getElementById("keyOpenai"),
-  xai: document.getElementById("keyXai"),
-  groq: document.getElementById("keyGroq"),
-  openrouter: document.getElementById("keyOpenrouter"),
-  gemini: document.getElementById("keyGemini"),
-  twocaptcha: document.getElementById("keyTwocaptcha"),
-};
 const serverUrlInput = document.getElementById("serverUrl");
+
+const keyIds = {
+  openai: "keyOpenai",
+  xai: "keyXai",
+  groq: "keyGroq",
+  openrouter: "keyOpenrouter",
+  gemini: "keyGemini",
+  twocaptcha: "keyTwocaptcha",
+};
 
 function log(msg, cls = "") {
   const line = document.createElement("div");
@@ -35,83 +35,85 @@ function log(msg, cls = "") {
   logDiv.prepend(line);
 }
 
-// ---- Load saved settings ----
-function loadSettings() {
-  chrome.storage.local.get(
-    ["autoSolve", "engine", "serverUrl", "keys"],
-    (data) => {
-      if (data.autoSolve !== undefined) autoSolve.checked = data.autoSolve;
-      if (data.engine) engineSelect.value = data.engine;
-      if (data.serverUrl) serverUrlInput.value = data.serverUrl;
-      if (data.keys) {
-        for (const [k, v] of Object.entries(data.keys)) {
-          if (keyInputs[k]) keyInputs[k].value = v;
-        }
-      }
-    }
-  );
-}
-loadSettings();
-
-// ---- Save settings ----
-saveBtn.addEventListener("click", () => {
-  const keys = {};
-  for (const [k, input] of Object.entries(keyInputs)) {
-    if (input.value.trim()) keys[k] = input.value.trim();
-  }
-  chrome.storage.local.set(
-    {
-      autoSolve: autoSolve.checked,
-      engine: engineSelect.value,
-      serverUrl: serverUrlInput.value.trim(),
-      keys,
-    },
-    () => {
-      savedMsg.classList.add("show");
-      setTimeout(() => savedMsg.classList.remove("show"), 2000);
-      log("Settings saved", "ok");
-    }
-  );
-});
-
-// ---- Settings change listeners ----
-autoSolve.addEventListener("change", () => {
-  chrome.storage.local.set({ autoSolve: autoSolve.checked });
-  sendToContentScript({ type: "UPDATE_SETTINGS", autoSolve: autoSolve.checked, engine: engineSelect.value });
-});
-engineSelect.addEventListener("change", () => {
-  chrome.storage.local.set({ engine: engineSelect.value });
-  sendToContentScript({ type: "UPDATE_SETTINGS", autoSolve: autoSolve.checked, engine: engineSelect.value });
-});
-
-function sendToContentScript(msg) {
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, msg);
-  });
-}
-
-// ---- Server communication ----
-function getServerUrl() {
-  return serverUrlInput.value.trim() || "http://127.0.0.1:5555";
-}
-
 function getKeys() {
   const keys = {};
-  for (const [k, input] of Object.entries(keyInputs)) {
-    if (input.value.trim()) keys[k] = input.value.trim();
+  for (const [k, id] of Object.entries(keyIds)) {
+    const el = document.getElementById(id);
+    if (el && el.value.trim()) keys[k] = el.value.trim();
   }
   return keys;
 }
 
+function getServerUrl() {
+  return serverUrlInput.value.trim() || "https://captcha-solve.vercel.app";
+}
+
+// ---- Save settings ----
+saveBtn.addEventListener("click", () => {
+  const keys = getKeys();
+  const data = {
+    autoSolve: autoSolve.checked,
+    engine: engineSelect.value,
+    serverUrl: getServerUrl(),
+    keys: keys,
+  };
+  chrome.storage.local.set(data, () => {
+    savedMsg.classList.add("show");
+    setTimeout(() => savedMsg.classList.remove("show"), 2000);
+    log(`Saved ${Object.keys(keys).length} key(s)`, "ok");
+    // Recheck server with new keys
+    checkServer();
+  });
+});
+
+// ---- Load settings ----
+function loadSettings() {
+  chrome.storage.local.get(["autoSolve", "engine", "serverUrl", "keys"], (data) => {
+    if (data.autoSolve !== undefined) autoSolve.checked = data.autoSolve;
+    if (data.engine) engineSelect.value = data.engine;
+    if (data.serverUrl) serverUrlInput.value = data.serverUrl;
+    if (data.keys) {
+      for (const [k, v] of Object.entries(data.keys)) {
+        const el = document.getElementById(keyIds[k]);
+        if (el) el.value = v;
+      }
+    }
+    // Auto-check server after loading
+    setTimeout(checkServer, 500);
+  });
+}
+loadSettings();
+
+// ---- Settings change listeners ----
+autoSolve.addEventListener("change", () => {
+  chrome.storage.local.set({ autoSolve: autoSolve.checked });
+  sendToContent({ type: "UPDATE_SETTINGS", autoSolve: autoSolve.checked, engine: engineSelect.value });
+});
+engineSelect.addEventListener("change", () => {
+  chrome.storage.local.set({ engine: engineSelect.value });
+  sendToContent({ type: "UPDATE_SETTINGS", autoSolve: autoSolve.checked, engine: engineSelect.value });
+});
+
+function sendToContent(msg) {
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0]) {
+      try { chrome.tabs.sendMessage(tabs[0].id, msg); } catch (_) {}
+    }
+  });
+}
+
+// ---- Server check ----
 async function checkServer() {
+  const serverUrl = getServerUrl();
+  const keys = getKeys();
+  const hasKeys = Object.keys(keys).length > 0;
+
   try {
-    const keys = await getKeys();
-    const hasKeys = Object.values(keys).some(v => v && v.trim());
-    const resp = await fetch(`${getServerUrl()}/status`, {
+    const resp = await fetch(`${serverUrl}/status`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ api_keys: keys }),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(8000),
     });
     const data = await resp.json();
     if (data.ok) {
@@ -122,7 +124,7 @@ async function checkServer() {
       if (parts.length) {
         statusText.textContent = `Server OK (${parts.join(" + ")})`;
       } else if (hasKeys) {
-        statusText.textContent = "Server OK (keys sent, engines loading...)";
+        statusText.textContent = "Server OK — keys sent, checking...";
       } else {
         statusText.textContent = "Server OK — add API key in Settings";
       }
@@ -130,8 +132,8 @@ async function checkServer() {
     }
   } catch (e) {
     statusDot.classList.remove("ok");
-    statusText.textContent = "Server offline - set URL in Settings";
-    log("Server offline", "err");
+    statusText.textContent = "Server offline";
+    log(`Server error: ${e.message}`, "err");
   }
 }
 
@@ -144,7 +146,7 @@ solveBtn.addEventListener("click", async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const response = await chrome.tabs.sendMessage(tab.id, { type: "SOLVE_NOW" });
     if (response && response.answer) {
-      log(`Solved: ${response.answer.substring(0, 100)}`, "ok");
+      log(`Solved!`, "ok");
     } else if (response && response.error) {
       log(`Error: ${response.error}`, "err");
     }
@@ -156,5 +158,4 @@ solveBtn.addEventListener("click", async () => {
   }
 });
 
-checkServer();
-setInterval(checkServer, 15000);
+setInterval(checkServer, 30000);
